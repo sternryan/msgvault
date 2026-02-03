@@ -15,32 +15,34 @@ import (
 
 // ProjectNoteGenerator generates project/label notes.
 type ProjectNoteGenerator struct {
-	store     *store.Store
-	engine    query.Engine
-	outputDir string
-	logger    *slog.Logger
+	store       *store.Store
+	engine      query.Engine
+	outputDir   string
+	logger      *slog.Logger
+	bulkFetcher BulkDataFetcher
 }
 
 // NewProjectNoteGenerator creates a new project note generator.
-func NewProjectNoteGenerator(s *store.Store, engine query.Engine, outputDir string, logger *slog.Logger) *ProjectNoteGenerator {
+func NewProjectNoteGenerator(s *store.Store, engine query.Engine, outputDir string, logger *slog.Logger, bulkFetcher BulkDataFetcher) *ProjectNoteGenerator {
 	return &ProjectNoteGenerator{
-		store:     s,
-		engine:    engine,
-		outputDir: outputDir,
-		logger:    logger,
+		store:       s,
+		engine:      engine,
+		outputDir:   outputDir,
+		logger:      logger,
+		bulkFetcher: bulkFetcher,
 	}
 }
 
 // ProjectData holds data for a project/label note.
 type ProjectData struct {
-	LabelName     string
-	LabelType     string
-	MessageCount  int
-	TotalSize     int64
-	FirstMessage  time.Time
-	LastMessage   time.Time
-	TopPeople     []PersonStat
-	RecentMonths  []string
+	LabelName    string
+	LabelType    string
+	MessageCount int
+	TotalSize    int64
+	FirstMessage time.Time
+	LastMessage  time.Time
+	TopPeople    []PersonStat
+	RecentMonths []string
 }
 
 // PersonStat represents person statistics for a project.
@@ -51,6 +53,19 @@ type PersonStat struct {
 
 // Generate generates project/label notes.
 func (g *ProjectNoteGenerator) Generate(ctx context.Context, opts ExportOptions) (int, error) {
+	// Pre-fetch all bulk data before the main loop (eliminates N+1 queries)
+	g.logger.Debug("pre-fetching bulk data for all projects")
+	topPeopleMap, err := g.bulkFetcher.FetchAllTopPeopleByProject(ctx, opts)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch top people: %w", err)
+	}
+
+	recentMonthsMap, err := g.bulkFetcher.FetchAllRecentMonthsByProject(ctx, opts)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch recent months: %w", err)
+	}
+	g.logger.Debug("bulk data pre-fetch complete")
+
 	// Query all labels with aggregated stats
 	query := `
 		SELECT
@@ -119,11 +134,9 @@ func (g *ProjectNoteGenerator) Generate(ctx context.Context, opts ExportOptions)
 			data.LastMessage = t
 		}
 
-		// Get top people for this project
-		data.TopPeople, _ = g.getTopPeople(ctx, data.LabelName, opts)
-
-		// Get recent activity months
-		data.RecentMonths, _ = g.getRecentMonths(ctx, data.LabelName, opts)
+		// Lookup bulk data from pre-fetched maps (O(1) instead of N queries)
+		data.TopPeople = topPeopleMap[data.LabelName]
+		data.RecentMonths = recentMonthsMap[data.LabelName]
 
 		// Generate note
 		if !opts.DryRun {
@@ -144,74 +157,6 @@ func (g *ProjectNoteGenerator) Generate(ctx context.Context, opts ExportOptions)
 	}
 
 	return count, nil
-}
-
-// getTopPeople gets the top people for a project/label.
-func (g *ProjectNoteGenerator) getTopPeople(ctx context.Context, labelName string, opts ExportOptions) ([]PersonStat, error) {
-	query := `
-		SELECT
-			p.email_address,
-			COUNT(DISTINCT m.id) as count
-		FROM participants p
-		JOIN message_recipients mr ON mr.participant_id = p.id
-		JOIN messages m ON m.id = mr.message_id
-		JOIN message_labels ml ON ml.message_id = m.id
-		JOIN labels l ON l.id = ml.label_id
-		WHERE l.name = ?
-			AND m.deleted_at IS NULL
-		GROUP BY p.id
-		ORDER BY count DESC
-		LIMIT 10
-	`
-
-	rows, err := g.store.DB().QueryContext(ctx, query, labelName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var people []PersonStat
-	for rows.Next() {
-		var person PersonStat
-		if err := rows.Scan(&person.Email, &person.Count); err != nil {
-			continue
-		}
-		people = append(people, person)
-	}
-
-	return people, nil
-}
-
-// getRecentMonths gets recent activity months for a project.
-func (g *ProjectNoteGenerator) getRecentMonths(ctx context.Context, labelName string, opts ExportOptions) ([]string, error) {
-	query := `
-		SELECT DISTINCT
-			strftime('%Y-%m', m.sent_at) as period
-		FROM messages m
-		JOIN message_labels ml ON ml.message_id = m.id
-		JOIN labels l ON l.id = ml.label_id
-		WHERE l.name = ?
-			AND m.deleted_at IS NULL
-		ORDER BY period DESC
-		LIMIT 12
-	`
-
-	rows, err := g.store.DB().QueryContext(ctx, query, labelName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var months []string
-	for rows.Next() {
-		var month string
-		if err := rows.Scan(&month); err != nil {
-			continue
-		}
-		months = append(months, month)
-	}
-
-	return months, nil
 }
 
 // generateNote generates a project note file.

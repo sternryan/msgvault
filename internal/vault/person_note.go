@@ -15,37 +15,39 @@ import (
 
 // PersonNoteGenerator generates person notes from participants.
 type PersonNoteGenerator struct {
-	store     *store.Store
-	engine    query.Engine
-	outputDir string
-	logger    *slog.Logger
+	store       *store.Store
+	engine      query.Engine
+	outputDir   string
+	logger      *slog.Logger
+	bulkFetcher BulkDataFetcher
 }
 
 // NewPersonNoteGenerator creates a new person note generator.
-func NewPersonNoteGenerator(s *store.Store, engine query.Engine, outputDir string, logger *slog.Logger) *PersonNoteGenerator {
+func NewPersonNoteGenerator(s *store.Store, engine query.Engine, outputDir string, logger *slog.Logger, bulkFetcher BulkDataFetcher) *PersonNoteGenerator {
 	return &PersonNoteGenerator{
-		store:     s,
-		engine:    engine,
-		outputDir: outputDir,
-		logger:    logger,
+		store:       s,
+		engine:      engine,
+		outputDir:   outputDir,
+		logger:      logger,
+		bulkFetcher: bulkFetcher,
 	}
 }
 
 // PersonData holds data for a person note.
 type PersonData struct {
-	Email            string
-	DisplayName      string
-	Domain           string
-	FirstContact     time.Time
-	LastContact      time.Time
-	MessageCount     int
-	SentCount        int
-	ReceivedCount    int
-	TotalSize        int64
-	AttachmentCount  int
-	TopLabels        []LabelStat
-	RelatedPeople    []RelatedPerson
-	RecentMonths     []string
+	Email           string
+	DisplayName     string
+	Domain          string
+	FirstContact    time.Time
+	LastContact     time.Time
+	MessageCount    int
+	SentCount       int
+	ReceivedCount   int
+	TotalSize       int64
+	AttachmentCount int
+	TopLabels       []LabelStat
+	RelatedPeople   []RelatedPerson
+	RecentMonths    []string
 }
 
 // LabelStat represents label usage statistics.
@@ -62,6 +64,24 @@ type RelatedPerson struct {
 
 // Generate generates person notes.
 func (g *PersonNoteGenerator) Generate(ctx context.Context, opts ExportOptions) (int, error) {
+	// Pre-fetch all bulk data before the main loop (eliminates N+1 queries)
+	g.logger.Debug("pre-fetching bulk data for all people")
+	topLabelsMap, err := g.bulkFetcher.FetchAllTopLabelsByPerson(ctx, opts)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch top labels: %w", err)
+	}
+
+	relatedPeopleMap, err := g.bulkFetcher.FetchAllRelatedPeople(ctx, opts)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch related people: %w", err)
+	}
+
+	recentMonthsMap, err := g.bulkFetcher.FetchAllRecentMonthsByPerson(ctx, opts)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch recent months: %w", err)
+	}
+	g.logger.Debug("bulk data pre-fetch complete")
+
 	// Query all participants with aggregated stats
 	query := `
 		SELECT
@@ -137,14 +157,10 @@ func (g *PersonNoteGenerator) Generate(ctx context.Context, opts ExportOptions) 
 		}
 		data.SentCount = data.MessageCount - data.ReceivedCount
 
-		// Get top labels for this person
-		data.TopLabels, _ = g.getTopLabels(ctx, data.Email, opts)
-
-		// Get related people
-		data.RelatedPeople, _ = g.getRelatedPeople(ctx, data.Email, opts)
-
-		// Get recent activity months
-		data.RecentMonths, _ = g.getRecentMonths(ctx, data.Email, opts)
+		// Lookup bulk data from pre-fetched maps (O(1) instead of N queries)
+		data.TopLabels = topLabelsMap[data.Email]
+		data.RelatedPeople = relatedPeopleMap[data.Email]
+		data.RecentMonths = recentMonthsMap[data.Email]
 
 		// Generate note
 		if !opts.DryRun {
@@ -165,112 +181,6 @@ func (g *PersonNoteGenerator) Generate(ctx context.Context, opts ExportOptions) 
 	}
 
 	return count, nil
-}
-
-// getTopLabels gets the top labels for a person.
-func (g *PersonNoteGenerator) getTopLabels(ctx context.Context, email string, opts ExportOptions) ([]LabelStat, error) {
-	query := `
-		SELECT
-			l.name,
-			COUNT(DISTINCT m.id) as count
-		FROM labels l
-		JOIN message_labels ml ON ml.label_id = l.id
-		JOIN messages m ON m.id = ml.message_id
-		JOIN message_recipients mr ON mr.message_id = m.id
-		JOIN participants p ON p.id = mr.participant_id
-		WHERE p.email_address = ?
-			AND m.deleted_at IS NULL
-		GROUP BY l.id
-		ORDER BY count DESC
-		LIMIT 10
-	`
-
-	rows, err := g.store.DB().QueryContext(ctx, query, email)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var labels []LabelStat
-	for rows.Next() {
-		var label LabelStat
-		if err := rows.Scan(&label.Name, &label.Count); err != nil {
-			continue
-		}
-		labels = append(labels, label)
-	}
-
-	return labels, nil
-}
-
-// getRelatedPeople gets people frequently in same threads.
-func (g *PersonNoteGenerator) getRelatedPeople(ctx context.Context, email string, opts ExportOptions) ([]RelatedPerson, error) {
-	query := `
-		SELECT
-			p2.email_address,
-			COUNT(DISTINCT m.conversation_id) as shared_threads
-		FROM messages m
-		JOIN message_recipients mr1 ON mr1.message_id = m.id
-		JOIN participants p1 ON p1.id = mr1.participant_id
-		JOIN message_recipients mr2 ON mr2.message_id = m.id
-		JOIN participants p2 ON p2.id = mr2.participant_id
-		WHERE p1.email_address = ?
-			AND p2.email_address != p1.email_address
-			AND m.deleted_at IS NULL
-		GROUP BY p2.id
-		HAVING shared_threads > 5
-		ORDER BY shared_threads DESC
-		LIMIT 10
-	`
-
-	rows, err := g.store.DB().QueryContext(ctx, query, email)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var related []RelatedPerson
-	for rows.Next() {
-		var person RelatedPerson
-		if err := rows.Scan(&person.Email, &person.SharedThreads); err != nil {
-			continue
-		}
-		related = append(related, person)
-	}
-
-	return related, nil
-}
-
-// getRecentMonths gets recent activity months for a person.
-func (g *PersonNoteGenerator) getRecentMonths(ctx context.Context, email string, opts ExportOptions) ([]string, error) {
-	query := `
-		SELECT DISTINCT
-			strftime('%Y-%m', m.sent_at) as period
-		FROM messages m
-		JOIN message_recipients mr ON mr.message_id = m.id
-		JOIN participants p ON p.id = mr.participant_id
-		WHERE p.email_address = ?
-			AND m.deleted_at IS NULL
-		ORDER BY period DESC
-		LIMIT 12
-	`
-
-	rows, err := g.store.DB().QueryContext(ctx, query, email)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var months []string
-	for rows.Next() {
-		var month string
-		if err := rows.Scan(&month); err != nil {
-			continue
-		}
-		months = append(months, month)
-	}
-
-	return months, nil
 }
 
 // generateNote generates a person note file.

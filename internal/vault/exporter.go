@@ -79,23 +79,27 @@ func (e *VaultExporter) Export(ctx context.Context, opts ExportOptions) error {
 		}
 	}
 
+	// Create bulk data fetcher (eliminates N+1 query problem)
+	bulkFetcher := NewBulkDataFetcher(e.engine, e.store)
+	e.logger.Debug("initialized bulk data fetcher")
+
 	// Export in phases
 	e.logger.Info("exporting people notes")
-	peopleCount, err := e.exportPeople(ctx, opts)
+	peopleCount, err := e.exportPeople(ctx, opts, bulkFetcher)
 	if err != nil {
 		return fmt.Errorf("failed to export people: %w", err)
 	}
 	e.logger.Info("people notes exported", "count", peopleCount)
 
 	e.logger.Info("exporting project/label notes")
-	projectsCount, err := e.exportProjects(ctx, opts)
+	projectsCount, err := e.exportProjects(ctx, opts, bulkFetcher)
 	if err != nil {
 		return fmt.Errorf("failed to export projects: %w", err)
 	}
 	e.logger.Info("project notes exported", "count", projectsCount)
 
 	e.logger.Info("exporting timeline notes")
-	timelineCount, err := e.exportTimeline(ctx, opts)
+	timelineCount, err := e.exportTimeline(ctx, opts, bulkFetcher)
 	if err != nil {
 		return fmt.Errorf("failed to export timeline: %w", err)
 	}
@@ -161,20 +165,20 @@ func (e *VaultExporter) createDirectoryStructure() error {
 }
 
 // exportPeople exports person notes.
-func (e *VaultExporter) exportPeople(ctx context.Context, opts ExportOptions) (int, error) {
-	generator := NewPersonNoteGenerator(e.store, e.engine, e.outputDir, e.logger)
+func (e *VaultExporter) exportPeople(ctx context.Context, opts ExportOptions, bulkFetcher BulkDataFetcher) (int, error) {
+	generator := NewPersonNoteGenerator(e.store, e.engine, e.outputDir, e.logger, bulkFetcher)
 	return generator.Generate(ctx, opts)
 }
 
 // exportProjects exports project/label notes.
-func (e *VaultExporter) exportProjects(ctx context.Context, opts ExportOptions) (int, error) {
-	generator := NewProjectNoteGenerator(e.store, e.engine, e.outputDir, e.logger)
+func (e *VaultExporter) exportProjects(ctx context.Context, opts ExportOptions, bulkFetcher BulkDataFetcher) (int, error) {
+	generator := NewProjectNoteGenerator(e.store, e.engine, e.outputDir, e.logger, bulkFetcher)
 	return generator.Generate(ctx, opts)
 }
 
 // exportTimeline exports timeline notes.
-func (e *VaultExporter) exportTimeline(ctx context.Context, opts ExportOptions) (int, error) {
-	generator := NewTimelineNoteGenerator(e.store, e.engine, e.outputDir, e.logger)
+func (e *VaultExporter) exportTimeline(ctx context.Context, opts ExportOptions, bulkFetcher BulkDataFetcher) (int, error) {
+	generator := NewTimelineNoteGenerator(e.store, e.engine, e.outputDir, e.logger, bulkFetcher)
 	return generator.Generate(ctx, opts)
 }
 
