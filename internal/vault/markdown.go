@@ -60,6 +60,9 @@ func SanitizeFilename(name string) string {
 	// Replace multiple consecutive spaces or dashes with single dash
 	name = regexp.MustCompile(`[\s-]+`).ReplaceAllString(name, "-")
 
+	// Trim dashes from edges
+	name = strings.Trim(name, "-")
+
 	// If empty after sanitization, use a default
 	if name == "" {
 		name = "unnamed"

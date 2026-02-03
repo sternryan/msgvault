@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ryanstern/msgvault/internal/query"
-	"github.com/ryanstern/msgvault/internal/store"
+	"github.com/wesm/msgvault/internal/query"
+	"github.com/wesm/msgvault/internal/store"
 )
 
 // ProjectNoteGenerator generates project/label notes.
@@ -88,7 +88,7 @@ func (g *ProjectNoteGenerator) Generate(ctx context.Context, opts ExportOptions)
 		query += fmt.Sprintf(` LIMIT %d`, opts.Limit)
 	}
 
-	rows, err := g.store.Query(ctx, query, args...)
+	rows, err := g.store.DB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("failed to query labels: %w", err)
 	}
@@ -164,7 +164,7 @@ func (g *ProjectNoteGenerator) getTopPeople(ctx context.Context, labelName strin
 		LIMIT 10
 	`
 
-	rows, err := g.store.Query(ctx, query, labelName)
+	rows, err := g.store.DB().QueryContext(ctx, query, labelName)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func (g *ProjectNoteGenerator) getRecentMonths(ctx context.Context, labelName st
 		LIMIT 12
 	`
 
-	rows, err := g.store.Query(ctx, query, labelName)
+	rows, err := g.store.DB().QueryContext(ctx, query, labelName)
 	if err != nil {
 		return nil, err
 	}

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ryanstern/msgvault/internal/query"
-	"github.com/ryanstern/msgvault/internal/store"
+	"github.com/wesm/msgvault/internal/query"
+	"github.com/wesm/msgvault/internal/store"
 )
 
 // MOCGenerator generates Maps of Content (MOCs).
@@ -64,7 +64,7 @@ func (g *MOCGenerator) generateMasterMOC(ctx context.Context) error {
 	var firstMessage, lastMessage sql.NullTime
 	var totalPeople, totalProjects int
 
-	err := g.store.QueryRow(ctx, `
+	err := g.store.DB().QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) as total_messages,
 			SUM(COALESCE(size_estimate, 0)) as total_size,
@@ -77,7 +77,7 @@ func (g *MOCGenerator) generateMasterMOC(ctx context.Context) error {
 		return fmt.Errorf("failed to query message stats: %w", err)
 	}
 
-	err = g.store.QueryRow(ctx, `
+	err = g.store.DB().QueryRowContext(ctx, `
 		SELECT COUNT(DISTINCT p.id)
 		FROM participants p
 		JOIN message_recipients mr ON mr.participant_id = p.id
@@ -88,7 +88,7 @@ func (g *MOCGenerator) generateMasterMOC(ctx context.Context) error {
 		return fmt.Errorf("failed to query people count: %w", err)
 	}
 
-	err = g.store.QueryRow(ctx, `
+	err = g.store.DB().QueryRowContext(ctx, `
 		SELECT COUNT(DISTINCT l.id)
 		FROM labels l
 		JOIN message_labels ml ON ml.label_id = l.id
@@ -101,7 +101,7 @@ func (g *MOCGenerator) generateMasterMOC(ctx context.Context) error {
 
 	// Get account count
 	var accountCount int
-	err = g.store.QueryRow(ctx, `SELECT COUNT(*) FROM sources`).Scan(&accountCount)
+	err = g.store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sources`).Scan(&accountCount)
 	if err != nil {
 		return fmt.Errorf("failed to query account count: %w", err)
 	}
@@ -197,7 +197,7 @@ func (g *MOCGenerator) generateMasterMOC(ctx context.Context) error {
 // generateTopContactsMOC generates the Top Contacts MOC.
 func (g *MOCGenerator) generateTopContactsMOC(ctx context.Context) error {
 	// Get top 50 contacts
-	rows, err := g.store.Query(ctx, `
+	rows, err := g.store.DB().QueryContext(ctx, `
 		SELECT
 			p.email_address,
 			p.display_name,
@@ -271,7 +271,7 @@ func (g *MOCGenerator) generateTopContactsMOC(ctx context.Context) error {
 // generateProjectsMOC generates the Projects MOC.
 func (g *MOCGenerator) generateProjectsMOC(ctx context.Context) error {
 	// Get all projects/labels
-	rows, err := g.store.Query(ctx, `
+	rows, err := g.store.DB().QueryContext(ctx, `
 		SELECT
 			l.name,
 			l.label_type,

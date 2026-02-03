@@ -2,7 +2,6 @@ package vault
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ryanstern/msgvault/internal/query"
-	"github.com/ryanstern/msgvault/internal/store"
+	"github.com/wesm/msgvault/internal/query"
+	"github.com/wesm/msgvault/internal/store"
 )
 
 // TimelineNoteGenerator generates timeline notes (year/month).
@@ -91,7 +90,7 @@ func (g *TimelineNoteGenerator) generateMonthlyNotes(ctx context.Context, opts E
 		query += fmt.Sprintf(` LIMIT %d`, opts.Limit)
 	}
 
-	rows, err := g.store.Query(ctx, query, args...)
+	rows, err := g.store.DB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("failed to query timeline: %w", err)
 	}
@@ -158,7 +157,7 @@ func (g *TimelineNoteGenerator) getTopPeople(ctx context.Context, period string,
 		LIMIT 10
 	`
 
-	rows, err := g.store.Query(ctx, query, period)
+	rows, err := g.store.DB().QueryContext(ctx, query, period)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +191,7 @@ func (g *TimelineNoteGenerator) getTopLabels(ctx context.Context, period string,
 		LIMIT 10
 	`
 
-	rows, err := g.store.Query(ctx, query, period)
+	rows, err := g.store.DB().QueryContext(ctx, query, period)
 	if err != nil {
 		return nil, err
 	}
