@@ -186,3 +186,37 @@ func GenerateMsgVaultURI(action string, params map[string]string) string {
 	}
 	return fmt.Sprintf("msgvault://%s", action)
 }
+
+// ParseNullableTimestamp parses a timestamp that may be null or in string format.
+// This handles both sql.NullTime (from SQLite) and string timestamps (from DuckDB).
+func ParseNullableTimestamp(value interface{}) (time.Time, bool) {
+	if value == nil {
+		return time.Time{}, false
+	}
+
+	switch v := value.(type) {
+	case time.Time:
+		return v, !v.IsZero()
+	case string:
+		if v == "" {
+			return time.Time{}, false
+		}
+		// Try common timestamp formats
+		formats := []string{
+			time.RFC3339,
+			time.RFC3339Nano,
+			"2006-01-02 15:04:05",
+			"2006-01-02 15:04:05.999999999",
+			"2006-01-02T15:04:05",
+			"2006-01-02T15:04:05.999999999",
+		}
+		for _, format := range formats {
+			if t, err := time.Parse(format, v); err == nil {
+				return t, true
+			}
+		}
+		return time.Time{}, false
+	default:
+		return time.Time{}, false
+	}
+}
