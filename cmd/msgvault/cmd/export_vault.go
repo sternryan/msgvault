@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/vault"
-	"github.com/spf13/cobra"
 )
 
 var exportVaultCmd = &cobra.Command{

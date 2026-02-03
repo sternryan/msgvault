@@ -15,19 +15,21 @@ import (
 
 // TimelineNoteGenerator generates timeline notes (year/month).
 type TimelineNoteGenerator struct {
-	store     *store.Store
-	engine    query.Engine
-	outputDir string
-	logger    *slog.Logger
+	store       *store.Store
+	engine      query.Engine
+	outputDir   string
+	logger      *slog.Logger
+	bulkFetcher BulkDataFetcher
 }
 
 // NewTimelineNoteGenerator creates a new timeline note generator.
-func NewTimelineNoteGenerator(s *store.Store, engine query.Engine, outputDir string, logger *slog.Logger) *TimelineNoteGenerator {
+func NewTimelineNoteGenerator(s *store.Store, engine query.Engine, outputDir string, logger *slog.Logger, bulkFetcher BulkDataFetcher) *TimelineNoteGenerator {
 	return &TimelineNoteGenerator{
-		store:     s,
-		engine:    engine,
-		outputDir: outputDir,
-		logger:    logger,
+		store:       s,
+		engine:      engine,
+		outputDir:   outputDir,
+		logger:      logger,
+		bulkFetcher: bulkFetcher,
 	}
 }
 
@@ -58,6 +60,19 @@ func (g *TimelineNoteGenerator) Generate(ctx context.Context, opts ExportOptions
 
 // generateMonthlyNotes generates monthly timeline notes.
 func (g *TimelineNoteGenerator) generateMonthlyNotes(ctx context.Context, opts ExportOptions) (int, error) {
+	// Pre-fetch all bulk data before the main loop (eliminates N+1 queries)
+	g.logger.Debug("pre-fetching bulk data for all timeline periods")
+	topPeopleMap, err := g.bulkFetcher.FetchAllTopPeopleByMonth(ctx, opts)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch top people: %w", err)
+	}
+
+	topLabelsMap, err := g.bulkFetcher.FetchAllTopLabelsByMonth(ctx, opts)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch top labels: %w", err)
+	}
+	g.logger.Debug("bulk data pre-fetch complete")
+
 	// Query monthly aggregates
 	query := `
 		SELECT
@@ -67,6 +82,7 @@ func (g *TimelineNoteGenerator) generateMonthlyNotes(ctx context.Context, opts E
 			COUNT(CASE WHEN sender_id IS NOT NULL THEN 1 END) as received_count
 		FROM messages
 		WHERE deleted_at IS NULL
+			AND sent_at IS NOT NULL
 	`
 
 	args := []interface{}{}
@@ -114,11 +130,9 @@ func (g *TimelineNoteGenerator) generateMonthlyNotes(ctx context.Context, opts E
 
 		data.SentCount = data.MessageCount - data.ReceivedCount
 
-		// Get top people for this period
-		data.TopPeople, _ = g.getTopPeople(ctx, data.Period, opts)
-
-		// Get top labels for this period
-		data.TopLabels, _ = g.getTopLabels(ctx, data.Period, opts)
+		// Lookup bulk data from pre-fetched maps (O(1) instead of N queries)
+		data.TopPeople = topPeopleMap[data.Period]
+		data.TopLabels = topLabelsMap[data.Period]
 
 		// Generate note
 		if !opts.DryRun {
@@ -139,74 +153,6 @@ func (g *TimelineNoteGenerator) generateMonthlyNotes(ctx context.Context, opts E
 	}
 
 	return count, nil
-}
-
-// getTopPeople gets the top people for a time period.
-func (g *TimelineNoteGenerator) getTopPeople(ctx context.Context, period string, opts ExportOptions) ([]PersonStat, error) {
-	query := `
-		SELECT
-			p.email_address,
-			COUNT(DISTINCT m.id) as count
-		FROM participants p
-		JOIN message_recipients mr ON mr.participant_id = p.id
-		JOIN messages m ON m.id = mr.message_id
-		WHERE strftime('%Y-%m', m.sent_at) = ?
-			AND m.deleted_at IS NULL
-		GROUP BY p.id
-		ORDER BY count DESC
-		LIMIT 10
-	`
-
-	rows, err := g.store.DB().QueryContext(ctx, query, period)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var people []PersonStat
-	for rows.Next() {
-		var person PersonStat
-		if err := rows.Scan(&person.Email, &person.Count); err != nil {
-			continue
-		}
-		people = append(people, person)
-	}
-
-	return people, nil
-}
-
-// getTopLabels gets the top labels for a time period.
-func (g *TimelineNoteGenerator) getTopLabels(ctx context.Context, period string, opts ExportOptions) ([]LabelStat, error) {
-	query := `
-		SELECT
-			l.name,
-			COUNT(DISTINCT m.id) as count
-		FROM labels l
-		JOIN message_labels ml ON ml.label_id = l.id
-		JOIN messages m ON m.id = ml.message_id
-		WHERE strftime('%Y-%m', m.sent_at) = ?
-			AND m.deleted_at IS NULL
-		GROUP BY l.id
-		ORDER BY count DESC
-		LIMIT 10
-	`
-
-	rows, err := g.store.DB().QueryContext(ctx, query, period)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var labels []LabelStat
-	for rows.Next() {
-		var label LabelStat
-		if err := rows.Scan(&label.Name, &label.Count); err != nil {
-			continue
-		}
-		labels = append(labels, label)
-	}
-
-	return labels, nil
 }
 
 // generateNote generates a timeline note file.
