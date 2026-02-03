@@ -2,7 +2,6 @@ package vault
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -97,7 +96,7 @@ func (g *ProjectNoteGenerator) Generate(ctx context.Context, opts ExportOptions)
 	count := 0
 	for rows.Next() {
 		var data ProjectData
-		var firstMessage, lastMessage sql.NullTime
+		var firstMessage, lastMessage interface{}
 
 		err := rows.Scan(
 			&data.LabelName,
@@ -112,11 +111,12 @@ func (g *ProjectNoteGenerator) Generate(ctx context.Context, opts ExportOptions)
 			continue
 		}
 
-		if firstMessage.Valid {
-			data.FirstMessage = firstMessage.Time
+		// Parse timestamps (handles both SQLite sql.NullTime and DuckDB strings)
+		if t, ok := ParseNullableTimestamp(firstMessage); ok {
+			data.FirstMessage = t
 		}
-		if lastMessage.Valid {
-			data.LastMessage = lastMessage.Time
+		if t, ok := ParseNullableTimestamp(lastMessage); ok {
+			data.LastMessage = t
 		}
 
 		// Get top people for this project

@@ -2,7 +2,6 @@ package vault
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -111,7 +110,7 @@ func (g *PersonNoteGenerator) Generate(ctx context.Context, opts ExportOptions) 
 	count := 0
 	for rows.Next() {
 		var data PersonData
-		var firstContact, lastContact sql.NullTime
+		var firstContact, lastContact interface{}
 
 		err := rows.Scan(
 			&data.Email,
@@ -129,11 +128,12 @@ func (g *PersonNoteGenerator) Generate(ctx context.Context, opts ExportOptions) 
 			continue
 		}
 
-		if firstContact.Valid {
-			data.FirstContact = firstContact.Time
+		// Parse timestamps (handles both SQLite sql.NullTime and DuckDB strings)
+		if t, ok := ParseNullableTimestamp(firstContact); ok {
+			data.FirstContact = t
 		}
-		if lastContact.Valid {
-			data.LastContact = lastContact.Time
+		if t, ok := ParseNullableTimestamp(lastContact); ok {
+			data.LastContact = t
 		}
 		data.SentCount = data.MessageCount - data.ReceivedCount
 

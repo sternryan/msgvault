@@ -2,7 +2,6 @@ package vault
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -61,7 +60,7 @@ func (g *MOCGenerator) generateMasterMOC(ctx context.Context) error {
 	// Get overall statistics
 	var totalMessages int
 	var totalSize int64
-	var firstMessage, lastMessage sql.NullTime
+	var firstMessage, lastMessage interface{}
 	var totalPeople, totalProjects int
 
 	err := g.store.DB().QueryRowContext(ctx, `
@@ -123,11 +122,16 @@ func (g *MOCGenerator) generateMasterMOC(ctx context.Context) error {
 	// Statistics
 	sb.WriteString("## Statistics\n\n")
 	sb.WriteString(fmt.Sprintf("- **Total Messages:** %s\n", FormatMessageCount(totalMessages)))
-	if firstMessage.Valid && lastMessage.Valid {
-		years := lastMessage.Time.Sub(firstMessage.Time).Hours() / 24 / 365
+
+	// Parse timestamps (handles both SQLite and DuckDB)
+	firstTime, firstOk := ParseNullableTimestamp(firstMessage)
+	lastTime, lastOk := ParseNullableTimestamp(lastMessage)
+
+	if firstOk && lastOk {
+		years := lastTime.Sub(firstTime).Hours() / 24 / 365
 		sb.WriteString(fmt.Sprintf("- **Date Range:** %s - %s (%.0f years)\n",
-			FormatDate(firstMessage.Time, "January 2006"),
-			FormatDate(lastMessage.Time, "January 2006"),
+			FormatDate(firstTime, "January 2006"),
+			FormatDate(lastTime, "January 2006"),
 			years))
 	}
 	if accountCount > 0 {
@@ -142,8 +146,8 @@ func (g *MOCGenerator) generateMasterMOC(ctx context.Context) error {
 	sb.WriteString("## Quick Access\n\n")
 	sb.WriteString("- [[MOC - Top Contacts]] - Your most frequent correspondents\n")
 	sb.WriteString("- [[MOC - Projects]] - All projects and labels\n")
-	if lastMessage.Valid {
-		currentPeriod := lastMessage.Time.Format("2006-01")
+	if lastOk {
+		currentPeriod := lastTime.Format("2006-01")
 		sb.WriteString(fmt.Sprintf("- [[Timeline/%s/%s|%s]] - Current month\n",
 			currentPeriod[:4], TimelineFilename(currentPeriod, "month"), FormatPeriod(currentPeriod)))
 	}
@@ -161,14 +165,14 @@ func (g *MOCGenerator) generateMasterMOC(ctx context.Context) error {
 
 	// Timeline section
 	sb.WriteString("## Timeline\n\n")
-	if lastMessage.Valid {
-		currentYear := lastMessage.Time.Format("2006")
+	if lastOk {
+		currentYear := lastTime.Format("2006")
 		sb.WriteString(fmt.Sprintf("- [[Timeline/%s/|%s]] - Current year\n", currentYear, currentYear))
 
 		// Add links to significant years
-		if firstMessage.Valid {
-			firstYear := firstMessage.Time.Year()
-			lastYear := lastMessage.Time.Year()
+		if firstOk {
+			firstYear := firstTime.Year()
+			lastYear := lastTime.Year()
 
 			// Show every 5th year for long archives
 			for year := lastYear - 5; year >= firstYear; year -= 5 {
@@ -220,14 +224,20 @@ func (g *MOCGenerator) generateTopContactsMOC(ctx context.Context) error {
 		email       string
 		displayName string
 		count       int
-		lastContact sql.NullTime
+		lastContact time.Time
+		hasContact  bool
 	}
 
 	var contacts []contact
 	for rows.Next() {
 		var c contact
-		if err := rows.Scan(&c.email, &c.displayName, &c.count, &c.lastContact); err != nil {
+		var lastContact interface{}
+		if err := rows.Scan(&c.email, &c.displayName, &c.count, &lastContact); err != nil {
 			continue
+		}
+		if t, ok := ParseNullableTimestamp(lastContact); ok {
+			c.lastContact = t
+			c.hasContact = true
 		}
 		contacts = append(contacts, c)
 	}
@@ -252,8 +262,8 @@ func (g *MOCGenerator) generateTopContactsMOC(ctx context.Context) error {
 		displayName := SafeDisplayName(c.displayName, c.email)
 		sb.WriteString(fmt.Sprintf("%d. [[People/%s|%s]] - %s",
 			i+1, PersonFilename(c.email), displayName, FormatMessageCount(c.count)))
-		if c.lastContact.Valid {
-			sb.WriteString(fmt.Sprintf(" (last: %s)", FormatDate(c.lastContact.Time, "Jan 2006")))
+		if c.hasContact {
+			sb.WriteString(fmt.Sprintf(" (last: %s)", FormatDate(c.lastContact, "Jan 2006")))
 		}
 		sb.WriteString("\n")
 	}
@@ -293,14 +303,20 @@ func (g *MOCGenerator) generateProjectsMOC(ctx context.Context) error {
 		name        string
 		labelType   string
 		count       int
-		lastMessage sql.NullTime
+		lastMessage time.Time
+		hasMessage  bool
 	}
 
 	var projects []project
 	for rows.Next() {
 		var p project
-		if err := rows.Scan(&p.name, &p.labelType, &p.count, &p.lastMessage); err != nil {
+		var lastMessage interface{}
+		if err := rows.Scan(&p.name, &p.labelType, &p.count, &lastMessage); err != nil {
 			continue
+		}
+		if t, ok := ParseNullableTimestamp(lastMessage); ok {
+			p.lastMessage = t
+			p.hasMessage = true
 		}
 		projects = append(projects, p)
 	}
@@ -336,8 +352,8 @@ func (g *MOCGenerator) generateProjectsMOC(ctx context.Context) error {
 		for _, p := range userLabels {
 			sb.WriteString(fmt.Sprintf("- [[Projects/%s|%s]] - %s",
 				ProjectFilename(p.name), p.name, FormatMessageCount(p.count)))
-			if p.lastMessage.Valid {
-				sb.WriteString(fmt.Sprintf(" (last: %s)", FormatDate(p.lastMessage.Time, "Jan 2006")))
+			if p.hasMessage {
+				sb.WriteString(fmt.Sprintf(" (last: %s)", FormatDate(p.lastMessage, "Jan 2006")))
 			}
 			sb.WriteString("\n")
 		}
@@ -350,8 +366,8 @@ func (g *MOCGenerator) generateProjectsMOC(ctx context.Context) error {
 		for _, p := range systemLabels {
 			sb.WriteString(fmt.Sprintf("- [[Projects/%s|%s]] - %s",
 				ProjectFilename(p.name), p.name, FormatMessageCount(p.count)))
-			if p.lastMessage.Valid {
-				sb.WriteString(fmt.Sprintf(" (last: %s)", FormatDate(p.lastMessage.Time, "Jan 2006")))
+			if p.hasMessage {
+				sb.WriteString(fmt.Sprintf(" (last: %s)", FormatDate(p.lastMessage, "Jan 2006")))
 			}
 			sb.WriteString("\n")
 		}
