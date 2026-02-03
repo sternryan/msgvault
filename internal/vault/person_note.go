@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ryanstern/msgvault/internal/query"
-	"github.com/ryanstern/msgvault/internal/store"
+	"github.com/wesm/msgvault/internal/query"
+	"github.com/wesm/msgvault/internal/store"
 )
 
 // PersonNoteGenerator generates person notes from participants.
@@ -102,7 +102,7 @@ func (g *PersonNoteGenerator) Generate(ctx context.Context, opts ExportOptions) 
 		query += fmt.Sprintf(` LIMIT %d`, opts.Limit)
 	}
 
-	rows, err := g.store.Query(ctx, query, args...)
+	rows, err := g.store.DB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("failed to query participants: %w", err)
 	}
@@ -185,7 +185,7 @@ func (g *PersonNoteGenerator) getTopLabels(ctx context.Context, email string, op
 		LIMIT 10
 	`
 
-	rows, err := g.store.Query(ctx, query, email)
+	rows, err := g.store.DB().QueryContext(ctx, query, email)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +223,7 @@ func (g *PersonNoteGenerator) getRelatedPeople(ctx context.Context, email string
 		LIMIT 10
 	`
 
-	rows, err := g.store.Query(ctx, query, email)
+	rows, err := g.store.DB().QueryContext(ctx, query, email)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func (g *PersonNoteGenerator) getRecentMonths(ctx context.Context, email string,
 		LIMIT 12
 	`
 
-	rows, err := g.store.Query(ctx, query, email)
+	rows, err := g.store.DB().QueryContext(ctx, query, email)
 	if err != nil {
 		return nil, err
 	}

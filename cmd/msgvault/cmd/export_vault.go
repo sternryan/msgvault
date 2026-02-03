@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ryanstern/msgvault/internal/config"
-	"github.com/ryanstern/msgvault/internal/query"
-	"github.com/ryanstern/msgvault/internal/store"
-	"github.com/ryanstern/msgvault/internal/vault"
+	"github.com/wesm/msgvault/internal/config"
+	"github.com/wesm/msgvault/internal/query"
+	"github.com/wesm/msgvault/internal/store"
+	"github.com/wesm/msgvault/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -65,7 +65,7 @@ func runExportVault(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	// Load config
-	cfg, err := config.LoadConfig()
+	cfg, err := config.Load("")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -99,7 +99,7 @@ func runExportVault(cmd *cobra.Command, args []string) error {
 		"dry_run", exportVaultDryRun)
 
 	// Open database
-	s, err := store.Open(cfg.DatabasePath())
+	s, err := store.Open(cfg.DatabaseDSN())
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -108,10 +108,10 @@ func runExportVault(cmd *cobra.Command, args []string) error {
 	// Create query engine
 	// Try DuckDB first (for Parquet support), fall back to SQLite
 	var engine query.Engine
-	duckEngine, err := query.NewDuckDBEngine(s, cfg.AnalyticsCachePath(), logger)
+	duckEngine, err := query.NewDuckDBEngine(cfg.AnalyticsDir(), cfg.DatabaseDSN(), s.DB())
 	if err != nil {
 		logger.Warn("could not create DuckDB engine, falling back to SQLite", "error", err)
-		engine = query.NewSQLiteEngine(s, logger)
+		engine = query.NewSQLiteEngine(s.DB())
 	} else {
 		engine = duckEngine
 	}
