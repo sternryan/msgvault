@@ -37,6 +37,10 @@ type Options struct {
 
 	// AttachmentsDir is where to store attachments
 	AttachmentsDir string
+
+	// SourceType is the source type for the database record (default: "gmail").
+	// Use "apple_messages" for iMessage sync.
+	SourceType string
 }
 
 // DefaultOptions returns sensible defaults.
@@ -44,6 +48,7 @@ func DefaultOptions() *Options {
 	return &Options{
 		BatchSize:          10,
 		CheckpointInterval: 200,
+		SourceType:         "gmail",
 	}
 }
 
@@ -213,7 +218,7 @@ func (s *Syncer) Full(ctx context.Context, email string) (*gmail.SyncSummary, er
 	summary := &gmail.SyncSummary{StartTime: startTime}
 
 	// Get or create source
-	source, err := s.store.GetOrCreateSource("gmail", email)
+	source, err := s.store.GetOrCreateSource(s.opts.SourceType, email)
 	if err != nil {
 		return nil, fmt.Errorf("get/create source: %w", err)
 	}
