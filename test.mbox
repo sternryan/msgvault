@@ -1,0 +1,23 @@
+From MAILER-DAEMON Mon Feb  2 21:24:14 2026
+From: Ryan Stern <ryan@quartermint.com>
+To: agent@quartermint.com
+Subject: Test Message for MBOX Import
+Date: Mon, 2 Feb 2026 21:24:14 -0600
+Message-ID: <test-id-1@quartermint.com>
+X-GM-THRID: 1234567890123456
+
+This is a test message body.
+It has two lines.
+
+From MAILER-DAEMON Mon Feb  2 21:25:14 2026
+From: Agent <agent@quartermint.com>
+To: Ryan Stern <ryan@quartermint.com>
+Subject: Re: Test Message for MBOX Import
+Date: Mon, 2 Feb 2026 21:25:14 -0600
+Message-ID: <test-id-2@quartermint.com>
+In-Reply-To: <test-id-1@quartermint.com>
+References: <test-id-1@quartermint.com>
+X-GM-THRID: 1234567890123456
+
+This is the reply.
+It should be in the same thread.
