@@ -8,15 +8,19 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
 	"github.com/wesm/msgvault/internal/config"
+	"github.com/wesm/msgvault/internal/store"
 )
 
 var (
-	cfgFile string
-	verbose bool
-	quiet   bool
-	cfg     *config.Config
-	logger  *slog.Logger
+	cfgFile    string
+	verbose    bool
+	quiet      bool
+	cfg        *config.Config
+	logger     *slog.Logger
+	passphrase string // Database encryption passphrase
 )
 
 var rootCmd = &cobra.Command{
@@ -51,6 +55,21 @@ in a single binary.`,
 			return fmt.Errorf("load config: %w", err)
 		}
 
+		// Acquire passphrase if encryption is enabled
+		if cfg.Encryption.Enabled {
+			if p := os.Getenv("MSGVAULT_PASSPHRASE"); p != "" {
+				passphrase = p
+			} else {
+				fmt.Fprintf(os.Stderr, "Enter database passphrase: ")
+				passBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Fprintln(os.Stderr)
+				if err != nil {
+					return fmt.Errorf("read passphrase: %w", err)
+				}
+				passphrase = string(passBytes)
+			}
+		}
+
 		return nil
 	},
 }
@@ -79,6 +98,15 @@ To use msgvault, you need a Google Cloud OAuth credential:
 // errOAuthNotConfigured returns a helpful error when OAuth client secrets are missing.
 func errOAuthNotConfigured() error {
 	return fmt.Errorf("OAuth client secrets not configured." + oauthSetupHint)
+}
+
+// openStore opens the msgvault database with the current passphrase (if any).
+func openStore(dbPath string) (*store.Store, error) {
+	var opts []store.OpenOption
+	if passphrase != "" {
+		opts = append(opts, store.WithPassphrase(passphrase))
+	}
+	return store.Open(dbPath, opts...)
 }
 
 // wrapOAuthError wraps an oauth/client-secrets error with setup instructions

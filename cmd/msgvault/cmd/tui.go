@@ -52,7 +52,7 @@ Performance:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Open database
 		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
@@ -65,7 +65,7 @@ Performance:
 			needsBuild, reason := cacheNeedsBuild(dbPath, analyticsDir)
 			if needsBuild {
 				fmt.Printf("Building analytics cache (%s)...\n", reason)
-				result, err := buildCache(dbPath, analyticsDir, true)
+				result, err := buildCache(dbPath, analyticsDir, true, passphrase)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: Failed to build cache: %v\n", err)
 					fmt.Fprintf(os.Stderr, "Falling back to SQLite (may be slow for large archives)\n")
@@ -134,7 +134,7 @@ func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
 
 	// Check if SQLite has newer messages
 	// We need to query SQLite directly to check max message ID
-	db, err := store.Open(dbPath)
+	db, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 	if err != nil {
 		// Can't open DB to check - force rebuild to be safe
 		return true, "cannot verify cache status"

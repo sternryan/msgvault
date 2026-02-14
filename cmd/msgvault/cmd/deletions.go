@@ -329,7 +329,7 @@ Examples:
 			backupOpts.OutputDir = filepath.Join(cfg.BackupsDir(), fmt.Sprintf("pre-delete-%s", time.Now().Format("20060102-150405")))
 
 			dbPath := cfg.DatabaseDSN()
-			backupStore, err := store.Open(dbPath)
+			backupStore, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 			if err != nil {
 				return fmt.Errorf("open database for backup: %w", err)
 			}
@@ -352,7 +352,7 @@ Examples:
 			}
 
 			dbPath := cfg.DatabaseDSN()
-			verifyStore, err := store.Open(dbPath)
+			verifyStore, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 			if err != nil {
 				return fmt.Errorf("open database for verification: %w", err)
 			}
@@ -418,7 +418,7 @@ Examples:
 
 		// Open database
 		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

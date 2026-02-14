@@ -9,7 +9,7 @@ import (
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // setupTestSQLite creates a test SQLite database with realistic email data.
@@ -182,7 +182,7 @@ func TestBuildCache_BasicExport(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	analyticsDir := filepath.Join(tmpDir, "analytics")
 
-	result, err := buildCache(dbPath, analyticsDir, false)
+	result, err := buildCache(dbPath, analyticsDir, false, "")
 	if err != nil {
 		t.Fatalf("buildCache: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestBuildCache_DataIntegrity(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	analyticsDir := filepath.Join(tmpDir, "analytics")
 
-	if _, err := buildCache(dbPath, analyticsDir, false); err != nil {
+	if _, err := buildCache(dbPath, analyticsDir, false, ""); err != nil {
 		t.Fatalf("buildCache: %v", err)
 	}
 
@@ -321,7 +321,7 @@ func TestBuildCache_IncrementalExport(t *testing.T) {
 	analyticsDir := filepath.Join(tmpDir, "analytics")
 
 	// First export
-	result1, err := buildCache(dbPath, analyticsDir, false)
+	result1, err := buildCache(dbPath, analyticsDir, false, "")
 	if err != nil {
 		t.Fatalf("first buildCache: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestBuildCache_IncrementalExport(t *testing.T) {
 	}
 
 	// Second export (incremental)
-	result2, err := buildCache(dbPath, analyticsDir, false)
+	result2, err := buildCache(dbPath, analyticsDir, false, "")
 	if err != nil {
 		t.Fatalf("second buildCache: %v", err)
 	}
@@ -389,12 +389,12 @@ func TestBuildCache_SkipsWhenNoNewMessages(t *testing.T) {
 	analyticsDir := filepath.Join(tmpDir, "analytics")
 
 	// First export
-	if _, err := buildCache(dbPath, analyticsDir, false); err != nil {
+	if _, err := buildCache(dbPath, analyticsDir, false, ""); err != nil {
 		t.Fatalf("first buildCache: %v", err)
 	}
 
 	// Second export without any new data
-	result, err := buildCache(dbPath, analyticsDir, false)
+	result, err := buildCache(dbPath, analyticsDir, false, "")
 	if err != nil {
 		t.Fatalf("second buildCache: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestBuildCache_FullRebuild(t *testing.T) {
 	analyticsDir := filepath.Join(tmpDir, "analytics")
 
 	// First export
-	if _, err := buildCache(dbPath, analyticsDir, false); err != nil {
+	if _, err := buildCache(dbPath, analyticsDir, false, ""); err != nil {
 		t.Fatalf("first buildCache: %v", err)
 	}
 
@@ -422,7 +422,7 @@ func TestBuildCache_FullRebuild(t *testing.T) {
 	_ = os.WriteFile(markerFile, []byte("test"), 0644)
 
 	// Full rebuild
-	result, err := buildCache(dbPath, analyticsDir, true)
+	result, err := buildCache(dbPath, analyticsDir, true, "")
 	if err != nil {
 		t.Fatalf("full rebuild: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestBuildCache_DeletedMessagesIncluded(t *testing.T) {
 	}
 
 	// Export
-	result, err := buildCache(dbPath, analyticsDir, false)
+	result, err := buildCache(dbPath, analyticsDir, false, "")
 	if err != nil {
 		t.Fatalf("buildCache: %v", err)
 	}
@@ -509,7 +509,7 @@ func TestBuildCache_MessagesWithoutSentAt(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	result, err := buildCache(dbPath, analyticsDir, false)
+	result, err := buildCache(dbPath, analyticsDir, false, "")
 	if err != nil {
 		t.Fatalf("buildCache: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestBuildCache_EndToEndWithQueryEngine(t *testing.T) {
 	analyticsDir := filepath.Join(tmpDir, "analytics")
 
 	// Build cache
-	if _, err := buildCache(dbPath, analyticsDir, false); err != nil {
+	if _, err := buildCache(dbPath, analyticsDir, false, ""); err != nil {
 		t.Fatalf("buildCache: %v", err)
 	}
 
@@ -663,7 +663,7 @@ func TestBuildCache_YearPartitioning(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	if _, err := buildCache(dbPath, analyticsDir, false); err != nil {
+	if _, err := buildCache(dbPath, analyticsDir, false, ""); err != nil {
 		t.Fatalf("buildCache: %v", err)
 	}
 
@@ -702,7 +702,7 @@ func TestBuildCache_UTF8Handling(t *testing.T) {
 	}
 
 	// Should not error
-	result, err := buildCache(dbPath, analyticsDir, false)
+	result, err := buildCache(dbPath, analyticsDir, false, "")
 	if err != nil {
 		t.Fatalf("buildCache with unicode: %v", err)
 	}
@@ -750,7 +750,7 @@ func TestBuildCache_EmptyDatabase(t *testing.T) {
 	`)
 	db.Close()
 
-	result, err := buildCache(dbPath, analyticsDir, false)
+	result, err := buildCache(dbPath, analyticsDir, false, "")
 	if err != nil {
 		t.Fatalf("buildCache on empty db: %v", err)
 	}
@@ -819,7 +819,7 @@ func BenchmarkBuildCache(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Clear analytics dir between runs
 		os.RemoveAll(analyticsDir)
-		if _, err := buildCache(dbPath, analyticsDir, true); err != nil {
+		if _, err := buildCache(dbPath, analyticsDir, true, ""); err != nil {
 			b.Fatalf("buildCache: %v", err)
 		}
 	}
@@ -864,7 +864,7 @@ func BenchmarkBuildCacheIncremental(b *testing.B) {
 	}
 
 	// Initial export
-	_, _ = buildCache(dbPath, analyticsDir, true)
+	_, _ = buildCache(dbPath, analyticsDir, true, "")
 
 	// Add 100 new messages for incremental test
 	for i := 10001; i <= 10100; i++ {
@@ -885,7 +885,7 @@ func BenchmarkBuildCacheIncremental(b *testing.B) {
 		data, _ := json.Marshal(state)
 		_ = os.WriteFile(stateFile, data, 0644)
 
-		if _, err := buildCache(dbPath, analyticsDir, false); err != nil {
+		if _, err := buildCache(dbPath, analyticsDir, false, ""); err != nil {
 			b.Fatalf("buildCache: %v", err)
 		}
 	}

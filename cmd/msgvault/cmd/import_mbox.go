@@ -44,7 +44,7 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Open msgvault database
 		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

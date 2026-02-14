@@ -99,7 +99,7 @@ func runExportVault(cmd *cobra.Command, args []string) error {
 		"dry_run", exportVaultDryRun)
 
 	// Open database
-	s, err := store.Open(cfg.DatabaseDSN())
+	s, err := store.Open(cfg.DatabaseDSN(), store.WithPassphrase(passphrase))
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

@@ -50,7 +50,7 @@ Example:
 
 		// Initialize database (in case it's new)
 		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

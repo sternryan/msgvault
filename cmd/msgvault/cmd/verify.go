@@ -59,7 +59,7 @@ Examples:
 func runLocalVerify(cmd *cobra.Command) error {
 	// Open database
 	dbPath := cfg.DatabaseDSN()
-	s, err := store.Open(dbPath)
+	s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -244,7 +244,7 @@ func runRemoteVerify(cmd *cobra.Command, email string) error {
 
 	// Open database
 	dbPath := cfg.DatabaseDSN()
-	s, err := store.Open(dbPath)
+	s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

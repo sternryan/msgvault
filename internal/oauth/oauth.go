@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/wesm/msgvault/internal/crypto"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -34,9 +35,16 @@ var ScopesDeletion = []string{
 
 // Manager handles OAuth2 token acquisition and storage.
 type Manager struct {
-	config    *oauth2.Config
-	tokensDir string
-	logger    *slog.Logger
+	config     *oauth2.Config
+	tokensDir  string
+	logger     *slog.Logger
+	passphrase string
+}
+
+// SetPassphrase sets the encryption passphrase for token files.
+// When set, tokens are encrypted at rest using AES-256-GCM.
+func (m *Manager) SetPassphrase(p string) {
+	m.passphrase = p
 }
 
 // NewManager creates an OAuth manager from client secrets.
@@ -228,6 +236,17 @@ func (m *Manager) loadToken(email string) (*oauth2.Token, error) {
 		return nil, err
 	}
 
+	// Decrypt if encrypted
+	if crypto.IsEncryptedToken(data) {
+		if m.passphrase == "" {
+			return nil, fmt.Errorf("token file is encrypted but no passphrase provided")
+		}
+		data, err = crypto.DecryptToken(data, m.passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt token: %w", err)
+		}
+	}
+
 	var tf tokenFile
 	if err := json.Unmarshal(data, &tf); err != nil {
 		return nil, err
@@ -242,6 +261,17 @@ func (m *Manager) loadTokenFile(email string) (*tokenFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+
+	// Decrypt if encrypted
+	if crypto.IsEncryptedToken(data) {
+		if m.passphrase == "" {
+			return nil, fmt.Errorf("token file is encrypted but no passphrase provided")
+		}
+		data, err = crypto.DecryptToken(data, m.passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt token: %w", err)
+		}
 	}
 
 	var tf tokenFile
@@ -292,6 +322,15 @@ func (m *Manager) saveToken(email string, token *oauth2.Token, scopes []string) 
 	data, err := json.MarshalIndent(tf, "", "  ")
 	if err != nil {
 		return err
+	}
+
+	// Encrypt if passphrase is set
+	if m.passphrase != "" {
+		encrypted, err := crypto.EncryptToken(data, m.passphrase)
+		if err != nil {
+			return fmt.Errorf("encrypt token: %w", err)
+		}
+		data = encrypted
 	}
 
 	path := m.tokenPath(email)

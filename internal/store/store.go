@@ -6,12 +6,13 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 
-	"github.com/mattn/go-sqlite3"
+	"github.com/mutecomm/go-sqlcipher/v4"
 )
 
 //go:embed schema.sql schema_sqlite.sql
@@ -23,9 +24,22 @@ type Store struct {
 	dbPath        string
 	fts5Available bool     // Whether FTS5 is available for full-text search
 	lockFile      *os.File // Advisory lock file
+	passphrase    string   // Stored for backup operations that need to reopen the DB
 }
 
-const defaultSQLiteParams = "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON"
+// OpenOption configures database opening behavior.
+type OpenOption func(*openConfig)
+
+type openConfig struct {
+	passphrase string
+}
+
+// WithPassphrase sets the encryption passphrase for SQLCipher.
+func WithPassphrase(passphrase string) OpenOption {
+	return func(c *openConfig) {
+		c.passphrase = passphrase
+	}
+}
 
 // isSQLiteError checks if err is a sqlite3.Error with a message containing substr.
 // This is more robust than strings.Contains on err.Error() because it first
@@ -45,7 +59,12 @@ func isSQLiteError(err error, substr string) bool {
 
 // Open opens or creates the database at the given path.
 // Currently only SQLite is supported. PostgreSQL URLs will return an error.
-func Open(dbPath string) (*Store, error) {
+func Open(dbPath string, opts ...OpenOption) (*Store, error) {
+	var cfg openConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	// Check for unsupported database URLs
 	if strings.HasPrefix(dbPath, "postgresql://") || strings.HasPrefix(dbPath, "postgres://") {
 		return nil, fmt.Errorf("PostgreSQL is not yet supported in the Go implementation; use SQLite path instead")
@@ -57,21 +76,36 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
 
-	dsn := dbPath + defaultSQLiteParams
+	// Build DSN with optional encryption passphrase
+	params := "_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON"
+	if cfg.passphrase != "" {
+		params = "_pragma_key=" + url.QueryEscape(cfg.passphrase) + "&" + params
+	}
+	dsn := dbPath + "?" + params
+
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	// Test connection
+	// Test connection (will fail if wrong passphrase)
 	if err := db.Ping(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("ping database: %w", err)
+		return nil, fmt.Errorf("open database (wrong passphrase?): %w", err)
+	}
+
+	// Additional verification for encrypted databases
+	if cfg.passphrase != "" {
+		if _, err := db.Exec("SELECT count(*) FROM sqlite_master"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("database passphrase verification failed: %w", err)
+		}
 	}
 
 	store := &Store{
-		db:     db,
-		dbPath: dbPath,
+		db:         db,
+		dbPath:     dbPath,
+		passphrase: cfg.passphrase,
 	}
 
 	// Attempt advisory lock
@@ -118,6 +152,11 @@ func (s *Store) DB() *sql.DB {
 // DBPath returns the path to the SQLite database file.
 func (s *Store) DBPath() string {
 	return s.dbPath
+}
+
+// Passphrase returns the encryption passphrase used to open the database.
+func (s *Store) Passphrase() string {
+	return s.passphrase
 }
 
 // withTx executes fn within a database transaction. If fn returns an error,

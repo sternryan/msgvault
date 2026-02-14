@@ -868,3 +868,87 @@ func TestStore_ReplaceMessageLabels_LargeBatch(t *testing.T) {
 
 	f.AssertLabelCount(msgID, 250)
 }
+
+func TestStore_OpenWithPassphrase(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/encrypted.db"
+
+	// Open with passphrase, write data
+	st, err := store.Open(dbPath, store.WithPassphrase("test-secret"))
+	if err != nil {
+		t.Fatalf("open with passphrase: %v", err)
+	}
+	if err := st.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	_, err = st.GetOrCreateSource("gmail", "test@example.com")
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	st.Close()
+
+	// Reopen with same passphrase - should succeed
+	st2, err := store.Open(dbPath, store.WithPassphrase("test-secret"))
+	if err != nil {
+		t.Fatalf("reopen with correct passphrase: %v", err)
+	}
+	defer st2.Close()
+
+	stats, err := st2.GetStats()
+	if err != nil {
+		t.Fatalf("get stats: %v", err)
+	}
+	if stats.SourceCount != 1 {
+		t.Errorf("SourceCount = %d, want 1", stats.SourceCount)
+	}
+	if st2.Passphrase() != "test-secret" {
+		t.Errorf("Passphrase() = %q, want %q", st2.Passphrase(), "test-secret")
+	}
+}
+
+func TestStore_OpenWithWrongPassphrase(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/encrypted.db"
+
+	// Create encrypted database
+	st, err := store.Open(dbPath, store.WithPassphrase("correct-password"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := st.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	st.Close()
+
+	// Try to open with wrong passphrase
+	_, err = store.Open(dbPath, store.WithPassphrase("wrong-password"))
+	if err == nil {
+		t.Fatal("expected error when opening with wrong passphrase")
+	}
+}
+
+func TestStore_OpenWithoutPassphrase_BackwardCompatible(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/plain.db"
+
+	// Open without passphrase (backward compatible)
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open without passphrase: %v", err)
+	}
+	if err := st.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	st.Close()
+
+	// Reopen without passphrase
+	st2, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen without passphrase: %v", err)
+	}
+	defer st2.Close()
+
+	if st2.Passphrase() != "" {
+		t.Errorf("Passphrase() = %q, want empty", st2.Passphrase())
+	}
+}
