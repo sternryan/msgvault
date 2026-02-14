@@ -19,7 +19,7 @@ created if they don't already exist.`,
 		dbPath := cfg.DatabaseDSN()
 		logger.Info("initializing database", "path", dbPath)
 
-		s, err := store.Open(dbPath)
+		s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

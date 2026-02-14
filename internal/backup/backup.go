@@ -11,11 +11,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
+	"github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/store"
 )
@@ -71,7 +72,7 @@ func Backup(ctx context.Context, st *store.Store, cfg *config.Config, opts *Back
 
 	// Backup database using SQLite backup API
 	dbDest := filepath.Join(outputDir, "msgvault.db")
-	if err := backupDatabase(st.DB(), dbDest); err != nil {
+	if err := backupDatabase(st.DB(), dbDest, st.Passphrase()); err != nil {
 		return "", fmt.Errorf("backup database: %w", err)
 	}
 
@@ -88,7 +89,7 @@ func Backup(ctx context.Context, st *store.Store, cfg *config.Config, opts *Back
 	}
 
 	// Get message count from backup DB
-	msgCount, err := countMessages(dbDest)
+	msgCount, err := countMessages(dbDest, st.Passphrase())
 	if err != nil {
 		return "", fmt.Errorf("count messages: %w", err)
 	}
@@ -171,8 +172,12 @@ func Backup(ctx context.Context, st *store.Store, cfg *config.Config, opts *Back
 }
 
 // backupDatabase uses SQLite's online backup API for an atomic snapshot.
-func backupDatabase(srcDB *sql.DB, destPath string) error {
-	destDB, err := sql.Open("sqlite3", destPath)
+func backupDatabase(srcDB *sql.DB, destPath string, passphrase string) error {
+	destDSN := destPath
+	if passphrase != "" {
+		destDSN = destPath + "?_pragma_key=" + url.QueryEscape(passphrase)
+	}
+	destDB, err := sql.Open("sqlite3", destDSN)
 	if err != nil {
 		return fmt.Errorf("open dest db: %w", err)
 	}
@@ -249,8 +254,12 @@ func hashFile(path string) (string, error) {
 }
 
 // countMessages opens the backup DB and counts messages.
-func countMessages(dbPath string) (int64, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+func countMessages(dbPath string, passphrase string) (int64, error) {
+	dsn := dbPath + "?mode=ro"
+	if passphrase != "" {
+		dsn = dbPath + "?mode=ro&_pragma_key=" + url.QueryEscape(passphrase)
+	}
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return 0, err
 	}

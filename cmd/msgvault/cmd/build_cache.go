@@ -4,13 +4,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/spf13/cobra"
 )
 
@@ -51,7 +52,7 @@ Use --full-rebuild to recreate all cache files from scratch.`,
 			return fmt.Errorf("database not found: %s\nRun 'msgvault init-db' first", dbPath)
 		}
 
-		result, err := buildCache(dbPath, analyticsDir, fullRebuild)
+		result, err := buildCache(dbPath, analyticsDir, fullRebuild, passphrase)
 		if err != nil {
 			return err
 		}
@@ -73,7 +74,7 @@ type buildResult struct {
 	Skipped       bool
 }
 
-func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, error) {
+func buildCache(dbPath, analyticsDir string, fullRebuild bool, passphrase string) (*buildResult, error) {
 	stateFile := filepath.Join(analyticsDir, "_last_sync.json")
 
 	// Create output directory
@@ -96,7 +97,11 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 	// Use direct SQLite to check for new messages (fast, uses indexes)
 	// DuckDB's sqlite extension doesn't use SQLite indexes, so this query
 	// would scan the entire table if we used DuckDB.
-	sqliteDB, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	sqliteDSN := dbPath + "?mode=ro"
+	if passphrase != "" {
+		sqliteDSN = dbPath + "?mode=ro&_pragma_key=" + url.QueryEscape(passphrase)
+	}
+	sqliteDB, err := sql.Open("sqlite3", sqliteDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite for max id check: %w", err)
 	}
@@ -119,6 +124,34 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		return &buildResult{Skipped: true}, nil
 	}
 
+	// If encrypted, create a temporary unencrypted copy for DuckDB to read.
+	// DuckDB's SQLite extension cannot read SQLCipher-encrypted databases.
+	var tmpDecryptedDB string
+	exportDBPath := dbPath
+	if passphrase != "" {
+		tmpDecryptedDB = filepath.Join(os.TempDir(), "msgvault-cache-export.db")
+		defer os.Remove(tmpDecryptedDB)
+
+		srcDB, err := sql.Open("sqlite3", dbPath+"?_pragma_key="+url.QueryEscape(passphrase))
+		if err != nil {
+			return nil, fmt.Errorf("open encrypted db for export: %w", err)
+		}
+		if _, err := srcDB.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS plaintext KEY ''", strings.ReplaceAll(tmpDecryptedDB, "'", "''"))); err != nil {
+			srcDB.Close()
+			return nil, fmt.Errorf("attach plaintext export db: %w", err)
+		}
+		if _, err := srcDB.Exec("SELECT sqlcipher_export('plaintext')"); err != nil {
+			srcDB.Close()
+			return nil, fmt.Errorf("sqlcipher_export: %w", err)
+		}
+		if _, err := srcDB.Exec("DETACH DATABASE plaintext"); err != nil {
+			srcDB.Close()
+			return nil, fmt.Errorf("detach plaintext: %w", err)
+		}
+		srcDB.Close()
+		exportDBPath = tmpDecryptedDB
+	}
+
 	// Open DuckDB for the actual export
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
@@ -131,8 +164,8 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		return nil, fmt.Errorf("load sqlite extension: %w", err)
 	}
 
-	// Attach SQLite database
-	escapedPath := strings.ReplaceAll(dbPath, "'", "''")
+	// Attach SQLite database (uses decrypted copy if encrypted)
+	escapedPath := strings.ReplaceAll(exportDBPath, "'", "''")
 	if _, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS sqlite_db (TYPE sqlite, READ_ONLY)", escapedPath)); err != nil {
 		return nil, fmt.Errorf("attach sqlite: %w", err)
 	}

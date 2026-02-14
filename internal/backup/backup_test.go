@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/store"
 )
@@ -64,7 +64,7 @@ func TestBackupCreatesValidDatabase(t *testing.T) {
 	}
 
 	// Open and verify integrity
-	if err := integrityCheck(dbPath); err != nil {
+	if err := integrityCheck(dbPath, ""); err != nil {
 		t.Fatalf("integrity check failed: %v", err)
 	}
 }

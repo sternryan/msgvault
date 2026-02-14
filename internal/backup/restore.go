@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,8 +18,9 @@ import (
 
 // RestoreOptions configures a restore operation.
 type RestoreOptions struct {
-	VerifyOnly bool // Just verify, don't restore
-	Force      bool // Overwrite existing data
+	VerifyOnly bool   // Just verify, don't restore
+	Force      bool   // Overwrite existing data
+	Passphrase string // Database encryption passphrase (for integrity check)
 }
 
 // Restore restores a backup to the msgvault data directory.
@@ -70,7 +72,7 @@ func Restore(ctx context.Context, backupPath string, cfg *config.Config, opts *R
 	}
 
 	// Run integrity check on backup database
-	if err := integrityCheck(dbPath); err != nil {
+	if err := integrityCheck(dbPath, opts.Passphrase); err != nil {
 		return fmt.Errorf("integrity check failed: %w", err)
 	}
 
@@ -146,8 +148,12 @@ func LoadManifest(backupDir string) (*BackupManifest, error) {
 }
 
 // integrityCheck runs PRAGMA integrity_check on a database.
-func integrityCheck(dbPath string) error {
-	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+func integrityCheck(dbPath string, passphrase string) error {
+	dsn := dbPath + "?mode=ro"
+	if passphrase != "" {
+		dsn = dbPath + "?mode=ro&_pragma_key=" + url.QueryEscape(passphrase)
+	}
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return err
 	}

@@ -12,12 +12,19 @@ import (
 
 // Config represents the msgvault configuration.
 type Config struct {
-	Data  DataConfig  `toml:"data"`
-	OAuth OAuthConfig `toml:"oauth"`
-	Sync  SyncConfig  `toml:"sync"`
+	Data       DataConfig       `toml:"data"`
+	OAuth      OAuthConfig      `toml:"oauth"`
+	Sync       SyncConfig       `toml:"sync"`
+	Encryption EncryptionConfig `toml:"encryption"`
 
 	// Computed paths (not from config file)
 	HomeDir string `toml:"-"`
+}
+
+// EncryptionConfig holds database encryption settings.
+type EncryptionConfig struct {
+	Enabled       bool `toml:"enabled"`
+	KDFIterations int  `toml:"kdf_iterations"`
 }
 
 // DataConfig holds data storage configuration.
