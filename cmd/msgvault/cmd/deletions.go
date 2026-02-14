@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wesm/msgvault/internal/backup"
 	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/gmail"
 	"github.com/wesm/msgvault/internal/oauth"
@@ -190,11 +191,13 @@ Examples:
 }
 
 var (
-	deleteTrash   bool // Use trash instead of permanent delete
-	deleteYes     bool
-	deleteDryRun  bool
-	deleteList    bool
-	deleteAccount string
+	deleteTrash      bool // Use trash instead of permanent delete
+	deleteYes        bool
+	deleteDryRun     bool
+	deleteList       bool
+	deleteAccount    string
+	deleteSkipVerify bool
+	deleteBackup     bool
 )
 
 var deleteStagedCmd = &cobra.Command{
@@ -298,12 +301,81 @@ Examples:
 
 		// Require confirmation
 		if !deleteYes {
-			fmt.Print("Proceed with deletion? [y/N]: ")
-			var response string
-			_, _ = fmt.Scanln(&response)
-			if response != "y" && response != "Y" {
-				fmt.Println("Cancelled.")
-				return nil
+			if !deleteTrash {
+				// Permanent delete requires typing the exact confirmation string
+				expected := fmt.Sprintf("delete %d messages", totalMessages)
+				fmt.Printf("Type %q to confirm permanent deletion: ", expected)
+				var response string
+				_, _ = fmt.Scanln(&response)
+				if response != expected {
+					fmt.Println("Cancelled. Input did not match.")
+					return nil
+				}
+			} else {
+				fmt.Print("Proceed with deletion? [y/N]: ")
+				var response string
+				_, _ = fmt.Scanln(&response)
+				if response != "y" && response != "Y" {
+					fmt.Println("Cancelled.")
+					return nil
+				}
+			}
+		}
+
+		// Create backup if requested
+		if deleteBackup {
+			fmt.Println("Creating backup before deletion...")
+			backupOpts := backup.DefaultBackupOptions()
+			backupOpts.OutputDir = filepath.Join(cfg.BackupsDir(), fmt.Sprintf("pre-delete-%s", time.Now().Format("20060102-150405")))
+
+			dbPath := cfg.DatabaseDSN()
+			backupStore, err := store.Open(dbPath)
+			if err != nil {
+				return fmt.Errorf("open database for backup: %w", err)
+			}
+
+			backupPath, err := backup.Backup(cmd.Context(), backupStore, cfg, backupOpts)
+			backupStore.Close()
+			if err != nil {
+				return fmt.Errorf("backup failed: %w", err)
+			}
+			fmt.Printf("Backup created: %s\n\n", backupPath)
+		}
+
+		// Verify messages before deletion
+		if !deleteSkipVerify {
+			fmt.Println("Verifying messages in local archive...")
+
+			var allGmailIDs []string
+			for _, m := range manifests {
+				allGmailIDs = append(allGmailIDs, m.GmailIDs...)
+			}
+
+			dbPath := cfg.DatabaseDSN()
+			verifyStore, err := store.Open(dbPath)
+			if err != nil {
+				return fmt.Errorf("open database for verification: %w", err)
+			}
+
+			verifyResult, err := backup.VerifyMessagesForDeletion(cmd.Context(), verifyStore, allGmailIDs)
+			verifyStore.Close()
+			if err != nil {
+				return fmt.Errorf("verification failed: %w", err)
+			}
+
+			if verifyResult.HasIssues() {
+				fmt.Println()
+				fmt.Println(verifyResult.Summary())
+				fmt.Println()
+				fmt.Print("Continue with deletion despite verification issues? [y/N]: ")
+				var response string
+				_, _ = fmt.Scanln(&response)
+				if response != "y" && response != "Y" {
+					fmt.Println("Cancelled.")
+					return nil
+				}
+			} else {
+				fmt.Printf("Verified: all %d messages intact in local archive.\n\n", verifyResult.Verified)
 			}
 		}
 
@@ -675,6 +747,8 @@ func init() {
 	deleteStagedCmd.Flags().BoolVar(&deleteDryRun, "dry-run", false, "Show what would be deleted")
 	deleteStagedCmd.Flags().BoolVarP(&deleteList, "list", "l", false, "List staged batches without executing")
 	deleteStagedCmd.Flags().StringVar(&deleteAccount, "account", "", "Gmail account to use")
+	deleteStagedCmd.Flags().BoolVar(&deleteSkipVerify, "skip-verify", false, "Skip pre-deletion verification")
+	deleteStagedCmd.Flags().BoolVar(&deleteBackup, "backup", false, "Create backup before deleting")
 
 	rootCmd.AddCommand(listDeletionsCmd)
 	rootCmd.AddCommand(showDeletionCmd)

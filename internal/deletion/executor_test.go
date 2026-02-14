@@ -894,6 +894,41 @@ func TestExecutor_ExecuteBatch_RetryScopeErrorAfterPartialSuccess(t *testing.T) 
 	}
 }
 
+// TestExecutor_PrepareExecution_SetsAuditFields verifies that hostname and
+// ExecutedAt are set when a manifest transitions to in_progress.
+func TestExecutor_PrepareExecution_SetsAuditFields(t *testing.T) {
+	tc := NewTestContext(t)
+	manifest := tc.CreateManifest("audit fields test", msgIDs(2))
+
+	before := time.Now()
+	if err := tc.Execute(manifest.ID); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	after := time.Now()
+
+	m, _, err := tc.Mgr.GetManifest(manifest.ID)
+	if err != nil {
+		t.Fatalf("GetManifest() error = %v", err)
+	}
+	if m.Execution == nil {
+		t.Fatal("Execution is nil")
+	}
+	if m.Execution.Hostname == "" {
+		t.Error("Hostname should be set")
+	}
+	if m.Execution.ExecutedAt.Before(before) || m.Execution.ExecutedAt.After(after) {
+		t.Errorf("ExecutedAt = %v, want between %v and %v", m.Execution.ExecutedAt, before, after)
+	}
+}
+
+// TestHostname verifies that the hostname helper returns a non-empty string.
+func TestHostname(t *testing.T) {
+	h := hostname()
+	if h == "" {
+		t.Error("hostname() returned empty string")
+	}
+}
+
 // TestNullProgress_AllMethods exercises all NullProgress methods for coverage.
 func TestNullProgress_AllMethods(t *testing.T) {
 	p := NullProgress{}

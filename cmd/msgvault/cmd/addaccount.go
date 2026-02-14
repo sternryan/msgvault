@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/oauth"
@@ -26,6 +27,15 @@ Example:
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		email := args[0]
+
+		// Validate email format
+		if !strings.Contains(email, "@") || strings.HasSuffix(email, "@") || strings.HasPrefix(email, "@") {
+			return fmt.Errorf("invalid email address %q: must be in user@domain format", email)
+		}
+		parts := strings.SplitN(email, "@", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" || !strings.Contains(parts[1], ".") {
+			return fmt.Errorf("invalid email address %q: must be in user@domain.tld format", email)
+		}
 
 		// For --headless, just show instructions (no OAuth config needed)
 		if headless {

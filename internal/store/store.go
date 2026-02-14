@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/mattn/go-sqlite3"
 )
@@ -20,7 +21,8 @@ var schemaFS embed.FS
 type Store struct {
 	db            *sql.DB
 	dbPath        string
-	fts5Available bool // Whether FTS5 is available for full-text search
+	fts5Available bool     // Whether FTS5 is available for full-text search
+	lockFile      *os.File // Advisory lock file
 }
 
 const defaultSQLiteParams = "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON"
@@ -67,20 +69,55 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	return &Store{
+	store := &Store{
 		db:     db,
 		dbPath: dbPath,
-	}, nil
+	}
+
+	// Attempt advisory lock
+	store.tryLock()
+
+	return store, nil
 }
 
-// Close closes the database connection.
+// tryLock attempts an advisory file lock next to the database.
+// Warns but does not fail if another process holds the lock.
+func (s *Store) tryLock() {
+	lockPath := s.dbPath + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return // Can't create lock file, skip
+	}
+
+	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if err != nil {
+		f.Close()
+		fmt.Fprintf(os.Stderr, "Warning: another msgvault process may be using %s\n", s.dbPath)
+		return
+	}
+
+	s.lockFile = f
+}
+
+// Close closes the database connection and releases the advisory lock.
 func (s *Store) Close() error {
+	if s.lockFile != nil {
+		syscall.Flock(int(s.lockFile.Fd()), syscall.LOCK_UN)
+		s.lockFile.Close()
+		os.Remove(s.lockFile.Name())
+		s.lockFile = nil
+	}
 	return s.db.Close()
 }
 
 // DB returns the underlying database connection for advanced queries.
 func (s *Store) DB() *sql.DB {
 	return s.db
+}
+
+// DBPath returns the path to the SQLite database file.
+func (s *Store) DBPath() string {
+	return s.dbPath
 }
 
 // withTx executes fn within a database transaction. If fn returns an error,
