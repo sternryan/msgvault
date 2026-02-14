@@ -14,6 +14,7 @@ import (
 var (
 	cfgFile string
 	verbose bool
+	quiet   bool
 	cfg     *config.Config
 	logger  *slog.Logger
 )
@@ -36,6 +37,8 @@ in a single binary.`,
 		level := slog.LevelInfo
 		if verbose {
 			level = slog.LevelDebug
+		} else if quiet {
+			level = slog.LevelWarn
 		}
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: level,
@@ -90,4 +93,5 @@ func wrapOAuthError(err error) error {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.msgvault/config.toml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress progress output")
 }

@@ -145,9 +145,7 @@ func (c *Client) request(ctx context.Context, op Operation, method, path string,
 		// Handle specific error codes
 		switch resp.StatusCode {
 		case 429: // Rate limited
-			// Log at Debug level since rate limiting is expected during high-volume syncs
-			// and the retry logic handles it automatically
-			c.logger.Debug("rate limited, backing off 30s", "path", path, "attempt", attempt)
+			c.logger.Info("rate limited, backing off 30s", "path", path, "attempt", attempt)
 			// Throttle the rate limiter to back off
 			c.rateLimiter.Throttle(30 * time.Second)
 			lastErr = fmt.Errorf("rate limited (429)")
@@ -156,9 +154,7 @@ func (c *Client) request(ctx context.Context, op Operation, method, path string,
 		case 403: // Could be rate limit or permission error
 			// Gmail returns 403 for quota exceeded with "rateLimitExceeded" reason
 			if isRateLimitError(respBody) {
-				// Log at Debug level since quota throttling is expected during high-volume syncs
-				// and the retry logic handles it automatically
-				c.logger.Debug("quota exceeded, backing off 60s", "path", path, "attempt", attempt)
+				c.logger.Info("quota exceeded, backing off 60s", "path", path, "attempt", attempt)
 				// Throttle the rate limiter - quota errors need longer backoff
 				c.rateLimiter.Throttle(60 * time.Second)
 				lastErr = fmt.Errorf("quota exceeded (403)")

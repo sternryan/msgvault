@@ -105,7 +105,7 @@ func AssertManifestEqual(t *testing.T, got, want *Manifest) {
 	t.Helper()
 	opts := cmp.Options{
 		cmpopts.IgnoreFields(Manifest{}, "CreatedAt"),
-		cmpopts.IgnoreFields(Execution{}, "StartedAt", "CompletedAt"),
+		cmpopts.IgnoreFields(Execution{}, "StartedAt", "CompletedAt", "ExecutedAt"),
 	}
 	if diff := cmp.Diff(want, got, opts...); diff != "" {
 		t.Errorf("Manifest mismatch (-want +got):\n%s", diff)
@@ -800,6 +800,31 @@ func TestManager_ListManifests_NonexistentDir(t *testing.T) {
 
 	// ListPending should return empty (not error) for nonexistent dir
 	assertListCount(t, mgr.ListPending, 0)
+}
+
+// TestManifest_Save_Atomic verifies that Save uses atomic write (temp file + rename),
+// ensuring no temp file persists on success and content matches expectations.
+func TestManifest_Save_Atomic(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "atomic-test.json")
+	tmpPath := path + ".tmp"
+
+	m := BuildManifest(t, "atomic test", "id1", "id2").Build()
+	if err := m.Save(path); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Verify the final file exists and is valid
+	loaded, err := LoadManifest(path)
+	if err != nil {
+		t.Fatalf("LoadManifest() error = %v", err)
+	}
+	AssertManifestEqual(t, loaded, m)
+
+	// Verify the temp file does not persist
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("temp file %s should not exist after successful Save, err = %v", tmpPath, err)
+	}
 }
 
 // TestManifest_Save_FilePermissions verifies that manifest files are saved with

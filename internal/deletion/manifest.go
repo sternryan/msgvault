@@ -62,6 +62,8 @@ type Execution struct {
 	StartedAt          time.Time  `json:"started_at"`
 	CompletedAt        *time.Time `json:"completed_at,omitempty"`
 	Method             Method     `json:"method"`
+	Hostname           string     `json:"hostname,omitempty"`
+	ExecutedAt         time.Time  `json:"executed_at,omitempty"`
 	Succeeded          int        `json:"succeeded"`
 	Failed             int        `json:"failed"`
 	FailedIDs          []string   `json:"failed_ids,omitempty"`
@@ -139,9 +141,9 @@ func LoadManifest(path string) (*Manifest, error) {
 	return &m, nil
 }
 
-// Save writes the manifest to a JSON file.
+// Save writes the manifest to a JSON file atomically.
+// It writes to a temporary file first, then renames to the target path.
 func (m *Manifest) Save(path string) error {
-	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -151,7 +153,12 @@ func (m *Manifest) Save(path string) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0600)
+	// Write to temp file first, then atomic rename
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // FormatSummary returns a human-readable summary of the deletion.

@@ -5,12 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/wesm/msgvault/internal/gmail"
 	"github.com/wesm/msgvault/internal/store"
 )
+
+// hostname returns the current machine's hostname, or empty string on error.
+func hostname() string {
+	h, _ := os.Hostname()
+	return h
+}
 
 // isNotFoundError checks if an error indicates the message was already deleted.
 // Treating 404 as success makes deletion idempotent.
@@ -159,13 +166,17 @@ func (e *Executor) prepareExecution(manifestID string, method Method) (*Manifest
 		}
 		manifest.Status = StatusInProgress
 		manifest.Execution = &Execution{
-			StartedAt: time.Now(),
-			Method:    method,
+			StartedAt:  time.Now(),
+			ExecutedAt: time.Now(),
+			Method:     method,
+			Hostname:   hostname(),
 		}
 	} else if manifest.Execution == nil {
 		manifest.Execution = &Execution{
-			StartedAt: time.Now(),
-			Method:    method,
+			StartedAt:  time.Now(),
+			ExecutedAt: time.Now(),
+			Method:     method,
+			Hostname:   hostname(),
 		}
 	}
 

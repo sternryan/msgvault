@@ -184,6 +184,7 @@ func (s *Syncer) processBatch(ctx context.Context, sourceID int64, listResp *gma
 
 		for i, raw := range rawMessages {
 			if raw == nil {
+				s.logger.Warn("message fetch returned nil", "gmail_id", newIDs[i])
 				checkpoint.ErrorsCount++
 				continue
 			}
@@ -235,6 +236,9 @@ func (s *Syncer) Full(ctx context.Context, email string) (*gmail.SyncSummary, er
 	defer func() {
 		if r := recover(); r != nil {
 			_ = s.store.FailSync(state.syncID, fmt.Sprintf("panic: %v", r))
+			s.logger.Error("internal error during sync",
+				"panic", r,
+				"hint", "Run 'msgvault verify <email>' to check integrity")
 			panic(r)
 		}
 	}()

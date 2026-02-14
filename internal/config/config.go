@@ -111,6 +111,16 @@ func (c *Config) AnalyticsDir() string {
 	return filepath.Join(c.Data.DataDir, "analytics")
 }
 
+// BackupsDir returns the path to the backups directory.
+func (c *Config) BackupsDir() string {
+	return filepath.Join(c.Data.DataDir, "backups")
+}
+
+// DeletionsDir returns the path to the deletions directory.
+func (c *Config) DeletionsDir() string {
+	return filepath.Join(c.Data.DataDir, "deletions")
+}
+
 // expandPath expands ~ to the user's home directory.
 // Only expands paths that are exactly "~" or start with "~/".
 func expandPath(path string) string {

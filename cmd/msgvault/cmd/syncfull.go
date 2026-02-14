@@ -50,6 +50,18 @@ Examples:
 			return errOAuthNotConfigured()
 		}
 
+		// Validate date formats upfront
+		if syncAfter != "" {
+			if _, err := time.Parse("2006-01-02", syncAfter); err != nil {
+				return fmt.Errorf("invalid --after date %q: use YYYY-MM-DD format", syncAfter)
+			}
+		}
+		if syncBefore != "" {
+			if _, err := time.Parse("2006-01-02", syncBefore); err != nil {
+				return fmt.Errorf("invalid --before date %q: use YYYY-MM-DD format", syncBefore)
+			}
+		}
+
 		// Open database
 		dbPath := cfg.DatabaseDSN()
 		s, err := store.Open(dbPath)
