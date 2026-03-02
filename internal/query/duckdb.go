@@ -102,6 +102,13 @@ func NewDuckDBEngine(analyticsDir string, sqlitePath string, sqliteDB *sql.DB) (
 	}, nil
 }
 
+// QueryContext executes a query on the DuckDB connection.
+// This enables callers (like DuckDBBulkFetcher) to run queries against
+// the attached SQLite database via DuckDB's vectorized engine.
+func (e *DuckDBEngine) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return e.db.QueryContext(ctx, query, args...)
+}
+
 // Close releases DuckDB resources.
 func (e *DuckDBEngine) Close() error {
 	return e.db.Close()
