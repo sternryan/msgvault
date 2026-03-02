@@ -48,16 +48,11 @@ type BulkDataFetcher interface {
 }
 
 // NewBulkDataFetcher creates the appropriate bulk fetcher based on available query engine.
-// Currently uses SQLite for bulk queries. DuckDB support can be added later for
-// additional 10-100x speedup by querying Parquet files directly.
+// Uses DuckDB when available for vectorized execution over SQLite tables;
+// falls back to direct SQLite queries otherwise.
 func NewBulkDataFetcher(engine query.Engine, st *store.Store) BulkDataFetcher {
-	// For now, always use SQLite bulk fetcher since it provides massive speedup
-	// over N+1 queries (3000x+ reduction in query count).
-	// DuckDB integration would require exposing the DB connection from DuckDBEngine.
-	//
-	// Potential future optimization: Type-assert to *query.DuckDBEngine and use
-	// Parquet-based queries for 10-100x additional speedup on large datasets.
-	_ = engine // Unused for now, but kept for future DuckDB integration
-
+	if duckdb, ok := engine.(*query.DuckDBEngine); ok {
+		return NewDuckDBBulkFetcher(duckdb)
+	}
 	return NewSQLiteBulkFetcher(st.DB())
 }
