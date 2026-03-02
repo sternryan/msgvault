@@ -58,16 +58,10 @@ func isSQLiteError(err error, substr string) bool {
 }
 
 // Open opens or creates the database at the given path.
-// Currently only SQLite is supported. PostgreSQL URLs will return an error.
 func Open(dbPath string, opts ...OpenOption) (*Store, error) {
 	var cfg openConfig
 	for _, opt := range opts {
 		opt(&cfg)
-	}
-
-	// Check for unsupported database URLs
-	if strings.HasPrefix(dbPath, "postgresql://") || strings.HasPrefix(dbPath, "postgres://") {
-		return nil, fmt.Errorf("PostgreSQL is not yet supported in the Go implementation; use SQLite path instead")
 	}
 
 	// Ensure directory exists
@@ -243,11 +237,8 @@ func insertInChunks(tx *sql.Tx, totalRows int, valuesPerRow int, queryPrefix str
 }
 
 // Rebind converts a query with ? placeholders to the appropriate format
-// for the current database driver. Currently SQLite-only (no conversion needed).
-// When PostgreSQL support is added, this will convert ? to $1, $2, etc.
+// for the current database driver.
 func (s *Store) Rebind(query string) string {
-	// SQLite uses ? placeholders, no conversion needed
-	// TODO: When adding PostgreSQL support, convert ? to $1, $2, etc.
 	return query
 }
 
