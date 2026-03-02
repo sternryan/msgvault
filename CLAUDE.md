@@ -151,7 +151,9 @@ The TUI automatically builds/updates the Parquet cache on launch when new messag
 
 ### Not Yet Implemented
 - **App-level encryption**: Encrypt database and attachments at rest
-- **Web UI**: Browser-based interface
+
+### Recently Implemented
+- **Web UI**: Full React/TypeScript SPA in `web/` — Dashboard, Messages, Aggregate, Search, Deletions, Thread, Message detail pages. Built with Vite, served by Go embed.
 
 ## Testing with Real Gmail Data
 
