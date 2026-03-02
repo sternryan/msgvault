@@ -229,8 +229,10 @@ func (c *ActionController) ExportAttachments(detail *query.MessageDetail, select
 	}
 	zipFilename := fmt.Sprintf("%s_%d.zip", subject, detail.ID)
 
+	exportDir := filepath.Join(c.dataDir, "exports")
+
 	return func() tea.Msg {
-		stats := export.Attachments(zipFilename, attachmentsDir, selectedAttachments)
+		stats := export.Attachments(zipFilename, attachmentsDir, exportDir, selectedAttachments)
 		msg := ExportResultMsg{Result: export.FormatExportResult(stats)}
 		// Only set Err for true failures: write errors or zero exported files.
 		// Partial success (some files exported, some errors) should show the

@@ -24,8 +24,16 @@ type ExportStats struct {
 
 // Attachments exports the given attachments into a zip file.
 // It reads attachment content from attachmentsDir using content-hash based paths.
-func Attachments(zipFilename, attachmentsDir string, attachments []query.AttachmentInfo) ExportStats {
-	zipFile, err := os.Create(zipFilename)
+// If outputDir is non-empty, the zip file is created there; otherwise it uses the current directory.
+func Attachments(zipFilename, attachmentsDir, outputDir string, attachments []query.AttachmentInfo) ExportStats {
+	zipPath := zipFilename
+	if outputDir != "" {
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return ExportStats{Errors: []string{fmt.Sprintf("failed to create output dir: %v", err)}}
+		}
+		zipPath = filepath.Join(outputDir, zipFilename)
+	}
+	zipFile, err := os.Create(zipPath)
 	if err != nil {
 		return ExportStats{Errors: []string{fmt.Sprintf("failed to create zip file: %v", err)}}
 	}
@@ -65,13 +73,16 @@ func Attachments(zipFilename, attachmentsDir string, attachments []query.Attachm
 	}
 
 	if stats.Count == 0 || writeError {
-		os.Remove(zipFilename)
+		os.Remove(zipPath)
 		stats.WriteError = writeError
 		return stats
 	}
 
-	cwd, _ := os.Getwd()
-	stats.ZipPath = filepath.Join(cwd, zipFilename)
+	absPath, err := filepath.Abs(zipPath)
+	if err != nil {
+		absPath = zipPath
+	}
+	stats.ZipPath = absPath
 	return stats
 }
 

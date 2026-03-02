@@ -140,10 +140,12 @@ func TestAttachments(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			attachDir := t.TempDir()
-			zipPath := filepath.Join(t.TempDir(), "test.zip")
+			outputDir := t.TempDir()
 
 			inputs := tt.setup(t, attachDir)
-			stats := Attachments(zipPath, attachDir, inputs)
+			stats := Attachments("test.zip", attachDir, outputDir, inputs)
+
+			zipPath := filepath.Join(outputDir, "test.zip")
 
 			if stats.Count != tt.wantCount {
 				t.Fatalf("Attachments() count = %d, want %d", stats.Count, tt.wantCount)

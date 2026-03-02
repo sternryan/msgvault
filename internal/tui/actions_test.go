@@ -332,9 +332,7 @@ func TestExportAttachments_PartialSuccess(t *testing.T) {
 	// Err should be nil because stats.Count > 0 (some files succeeded).
 	env := newTestEnv(t)
 
-	// Clean up the zip file that gets created in current directory.
-	// TODO: ExportAttachments should write to a configurable output directory.
-	t.Cleanup(func() { os.Remove("Test_1.zip") })
+	// Zip file is now written to dataDir/exports/ (configurable output directory).
 
 	// Create a valid attachment file
 	validHash := "abc123def456ghi789"
@@ -383,9 +381,7 @@ func TestExportAttachments_FullSuccess(t *testing.T) {
 	// Full success: all attachments export without errors.
 	env := newTestEnv(t)
 
-	// Clean up the zip file that gets created in current directory.
-	// TODO: ExportAttachments should write to a configurable output directory.
-	t.Cleanup(func() { os.Remove("Test_1.zip") })
+	// Zip file is now written to dataDir/exports/ (configurable output directory).
 
 	// Create a valid attachment file
 	validHash := "abc123def456ghi789"
