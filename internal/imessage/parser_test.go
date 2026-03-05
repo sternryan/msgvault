@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"howett.net/plist"
 )
 
 func TestAppleTimestampToTime(t *testing.T) {
@@ -210,6 +212,92 @@ func TestBuildMIME_EmptyBody(t *testing.T) {
 	parts := strings.SplitN(mimeStr, "\r\n\r\n", 2)
 	if len(parts) != 2 || parts[1] != "" {
 		t.Errorf("expected empty body, got %q", parts[1])
+	}
+}
+
+// makeAttributedBodyBlob builds a minimal NSKeyedArchiver binary plist blob
+// equivalent to an NSAttributedString with the given text, mirroring what
+// macOS Ventura+ stores in chat.db's attributedBody column.
+func makeAttributedBodyBlob(text string) []byte {
+	// NSKeyedArchiver structure:
+	//   $objects[0] = "$null"
+	//   $objects[1] = { NS.string: UID(2), $class: UID(3) }  <- NSAttributedString
+	//   $objects[2] = text                                    <- NSString
+	//   $objects[3] = { $classname: "NSAttributedString", ... }
+	archive := struct {
+		Archiver string               `plist:"$archiver"`
+		Version  uint64               `plist:"$version"`
+		Top      map[string]plist.UID `plist:"$top"`
+		Objects  []interface{}        `plist:"$objects"`
+	}{
+		Archiver: "NSKeyedArchiver",
+		Version:  100000,
+		Top:      map[string]plist.UID{"root": 1},
+		Objects: []interface{}{
+			"$null",
+			map[string]interface{}{
+				"$class":    plist.UID(3),
+				"NS.string": plist.UID(2),
+			},
+			text,
+			map[string]interface{}{
+				"$classname": "NSAttributedString",
+				"$classes":   []string{"NSAttributedString", "NSObject"},
+			},
+		},
+	}
+	data, err := plist.Marshal(archive, plist.BinaryFormat)
+	if err != nil {
+		panic("makeAttributedBodyBlob: " + err.Error())
+	}
+	return data
+}
+
+func TestExtractAttributedBodyText(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+		want  string
+	}{
+		{
+			name:  "nil blob",
+			input: nil,
+			want:  "",
+		},
+		{
+			name:  "empty blob",
+			input: []byte{},
+			want:  "",
+		},
+		{
+			name:  "invalid plist",
+			input: []byte("not a plist"),
+			want:  "",
+		},
+		{
+			name:  "plain ASCII message",
+			input: makeAttributedBodyBlob("Hello from iMessage"),
+			want:  "Hello from iMessage",
+		},
+		{
+			name:  "unicode and emoji",
+			input: makeAttributedBodyBlob("Hey! 😊 こんにちは"),
+			want:  "Hey! 😊 こんにちは",
+		},
+		{
+			name:  "multiline message",
+			input: makeAttributedBodyBlob("Line one\nLine two\nLine three"),
+			want:  "Line one\nLine two\nLine three",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractAttributedBodyText(tt.input)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -29,3 +29,10 @@ oauth_client*.json
 .vscode/
 *.swp
 *.swo
+
+# Frontend
+web/node_modules/
+internal/web/dist/
+
+# Obsidian
+.obsidian/

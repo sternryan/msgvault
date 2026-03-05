@@ -9,72 +9,72 @@ import "time"
 // AggregateRow represents a single row in an aggregate view.
 // Used for Senders, Recipients, Domains, Labels, and Time views.
 type AggregateRow struct {
-	Key             string // email, domain, label name, or time period
-	Count           int64  // number of messages
-	TotalSize       int64  // sum of size_estimate in bytes
-	AttachmentSize  int64  // sum of attachment sizes in bytes
-	AttachmentCount int64  // number of attachments
-	TotalUnique     int64  // total unique keys (same for all rows, computed via COUNT(*) OVER())
+	Key             string `json:"key"`             // email, domain, label name, or time period
+	Count           int64  `json:"count"`           // number of messages
+	TotalSize       int64  `json:"totalSize"`       // sum of size_estimate in bytes
+	AttachmentSize  int64  `json:"attachmentSize"`  // sum of attachment sizes in bytes
+	AttachmentCount int64  `json:"attachmentCount"` // number of attachments
+	TotalUnique     int64  `json:"totalUnique"`     // total unique keys (same for all rows, computed via COUNT(*) OVER())
 }
 
 // MessageSummary represents a message in list views.
 // Contains enough information for display without fetching the full body.
 type MessageSummary struct {
-	ID              int64
-	SourceMessageID string
-	ConversationID  int64
-	Subject         string
-	Snippet         string
-	FromEmail       string
-	FromName        string
-	SentAt          time.Time
-	SizeEstimate    int64
-	HasAttachments  bool
-	AttachmentCount int
-	Labels          []string
-	DeletedAt       *time.Time // When message was deleted from server (nil if not deleted)
+	ID              int64      `json:"id"`
+	SourceMessageID string     `json:"sourceMessageId"`
+	ConversationID  int64      `json:"conversationId"`
+	Subject         string     `json:"subject"`
+	Snippet         string     `json:"snippet"`
+	FromEmail       string     `json:"fromEmail"`
+	FromName        string     `json:"fromName"`
+	SentAt          time.Time  `json:"sentAt"`
+	SizeEstimate    int64      `json:"sizeEstimate"`
+	HasAttachments  bool       `json:"hasAttachments"`
+	AttachmentCount int        `json:"attachmentCount"`
+	Labels          []string   `json:"labels"`
+	DeletedAt       *time.Time `json:"deletedAt,omitempty"` // When message was deleted from server (nil if not deleted)
 }
 
 // MessageDetail represents a full message with body and attachments.
 type MessageDetail struct {
-	ID              int64
-	SourceMessageID string
-	ConversationID  int64
-	Subject         string
-	Snippet         string
-	SentAt          time.Time
-	ReceivedAt      *time.Time
-	SizeEstimate    int64
-	HasAttachments  bool
+	ID              int64      `json:"id"`
+	SourceMessageID string     `json:"sourceMessageId"`
+	ConversationID  int64      `json:"conversationId"`
+	Subject         string     `json:"subject"`
+	Snippet         string     `json:"snippet"`
+	SentAt          time.Time  `json:"sentAt"`
+	ReceivedAt      *time.Time `json:"receivedAt,omitempty"`
+	SizeEstimate    int64      `json:"sizeEstimate"`
+	HasAttachments  bool       `json:"hasAttachments"`
 
 	// Participants
-	From []Address
-	To   []Address
-	Cc   []Address
-	Bcc  []Address
+	From []Address `json:"from"`
+	To   []Address `json:"to"`
+	Cc   []Address `json:"cc"`
+	Bcc  []Address `json:"bcc"`
 
 	// Content
-	BodyText string
-	BodyHTML string
+	BodyText string `json:"bodyText"`
+	BodyHTML string `json:"bodyHtml"`
 
 	// Metadata
-	Labels      []string
-	Attachments []AttachmentInfo
+	Labels      []string         `json:"labels"`
+	Attachments []AttachmentInfo `json:"attachments"`
 }
 
 // Address represents an email address with optional display name.
 type Address struct {
-	Email string
-	Name  string
+	Email string `json:"email"`
+	Name  string `json:"name"`
 }
 
 // AttachmentInfo represents attachment metadata.
 type AttachmentInfo struct {
-	ID          int64
-	Filename    string
-	MimeType    string
-	Size        int64
-	ContentHash string
+	ID          int64  `json:"id"`
+	Filename    string `json:"filename"`
+	MimeType    string `json:"mimeType"`
+	Size        int64  `json:"size"`
+	ContentHash string `json:"contentHash,omitempty"`
 }
 
 // ViewType represents the type of aggregate view.
@@ -315,10 +315,10 @@ func DefaultAggregateOptions() AggregateOptions {
 
 // AccountInfo represents a source account.
 type AccountInfo struct {
-	ID          int64
-	SourceType  string
-	Identifier  string // email address
-	DisplayName string
+	ID          int64  `json:"id"`
+	SourceType  string `json:"sourceType"`
+	Identifier  string `json:"identifier"` // email address
+	DisplayName string `json:"displayName"`
 }
 
 // StatsOptions configures a stats query.

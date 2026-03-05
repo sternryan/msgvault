@@ -50,53 +50,14 @@ Performance:
   aggregation queries. Run 'msgvault-sync build-parquet' to generate them.
   Use --force-sql to bypass Parquet and query SQLite directly (slow).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Open database
 		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
-		if err != nil {
-			return fmt.Errorf("open database: %w", err)
-		}
-		defer s.Close()
-
 		analyticsDir := cfg.AnalyticsDir()
 
-		// Check if cache needs to be built/updated (unless forcing SQL or skipping)
-		if !forceSQL && !skipCacheBuild {
-			needsBuild, reason := cacheNeedsBuild(dbPath, analyticsDir)
-			if needsBuild {
-				fmt.Printf("Building analytics cache (%s)...\n", reason)
-				result, err := buildCache(dbPath, analyticsDir, true, passphrase)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: Failed to build cache: %v\n", err)
-					fmt.Fprintf(os.Stderr, "Falling back to SQLite (may be slow for large archives)\n")
-				} else if !result.Skipped {
-					fmt.Printf("Cached %d messages for fast queries.\n", result.ExportedCount)
-				}
-			}
+		_, engine, cleanup, err := initQueryEngine(dbPath, analyticsDir, forceSQL, skipCacheBuild)
+		if err != nil {
+			return err
 		}
-
-		// Determine query engine to use
-		var engine query.Engine
-
-		if !forceSQL && query.HasParquetData(analyticsDir) {
-			// Use DuckDB for fast Parquet queries
-			duckEngine, err := query.NewDuckDBEngine(analyticsDir, dbPath, s.DB())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: Failed to open Parquet engine: %v\n", err)
-				fmt.Fprintf(os.Stderr, "Falling back to SQLite (may be slow for large archives)\n")
-				engine = query.NewSQLiteEngine(s.DB())
-			} else {
-				engine = duckEngine
-				defer duckEngine.Close()
-			}
-		} else {
-			// Use SQLite directly
-			if !forceSQL {
-				fmt.Fprintf(os.Stderr, "Note: No cache data available, using SQLite (slow for large archives)\n")
-				fmt.Fprintf(os.Stderr, "Run 'msgvault build-cache' to enable fast queries.\n")
-			}
-			engine = query.NewSQLiteEngine(s.DB())
-		}
+		defer cleanup()
 
 		// Create and run TUI
 		model := tui.New(engine, tui.Options{DataDir: cfg.Data.DataDir, Version: Version})

@@ -12,10 +12,27 @@ LDFLAGS := -X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=$(VERSION) \
 
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 
-.PHONY: build build-release install clean test test-v fmt lint tidy shootout run-shootout setup-hooks help
+.PHONY: build build-release install clean test test-v fmt lint tidy shootout run-shootout setup-hooks web-install web-dev web-build help
 
-# Build the binary (debug)
-build:
+# Install web dependencies
+web-install:
+	cd web && npm install
+
+# Run web dev server
+web-dev:
+	cd web && npm run dev
+
+# Build web frontend
+web-build:
+	cd web && npm run build
+
+# Build the binary (debug) — builds frontend first if node_modules exists
+build: web-build
+	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o msgvault ./cmd/msgvault
+	@chmod +x msgvault
+
+# Build Go only (skip frontend)
+build-go:
 	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o msgvault ./cmd/msgvault
 	@chmod +x msgvault
 
@@ -44,6 +61,7 @@ install:
 clean:
 	rm -f msgvault mimeshootout
 	rm -rf bin/
+	rm -rf internal/web/dist
 
 # Run tests
 test:
@@ -83,9 +101,14 @@ run-shootout: shootout
 help:
 	@echo "msgvault build targets:"
 	@echo ""
-	@echo "  build          - Debug build"
+	@echo "  build          - Build frontend + Go binary"
+	@echo "  build-go       - Build Go binary only (skip frontend)"
 	@echo "  build-release  - Release build (optimized, stripped)"
 	@echo "  install        - Install to ~/.local/bin or GOPATH"
+	@echo ""
+	@echo "  web-install    - Install frontend dependencies"
+	@echo "  web-dev        - Run frontend dev server"
+	@echo "  web-build      - Build frontend"
 	@echo ""
 	@echo "  test           - Run tests"
 	@echo "  test-v         - Run tests (verbose)"
