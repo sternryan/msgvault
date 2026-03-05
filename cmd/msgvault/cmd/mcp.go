@@ -2,13 +2,9 @@ package cmd
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	mcpserver "github.com/wesm/msgvault/internal/mcp"
-	"github.com/wesm/msgvault/internal/query"
-	"github.com/wesm/msgvault/internal/store"
 )
 
 var mcpForceSQL bool
@@ -33,28 +29,13 @@ Add to Claude Desktop config:
   }`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
-		if err != nil {
-			return fmt.Errorf("open database: %w", err)
-		}
-		defer s.Close()
-
-		var engine query.Engine
 		analyticsDir := cfg.AnalyticsDir()
 
-		if !mcpForceSQL && query.HasParquetData(analyticsDir) {
-			duckEngine, err := query.NewDuckDBEngine(analyticsDir, dbPath, s.DB())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: Failed to open Parquet engine: %v\n", err)
-				fmt.Fprintf(os.Stderr, "Falling back to SQLite\n")
-				engine = query.NewSQLiteEngine(s.DB())
-			} else {
-				engine = duckEngine
-				defer duckEngine.Close()
-			}
-		} else {
-			engine = query.NewSQLiteEngine(s.DB())
+		_, engine, cleanup, err := initQueryEngine(dbPath, analyticsDir, mcpForceSQL, true)
+		if err != nil {
+			return err
 		}
+		defer cleanup()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

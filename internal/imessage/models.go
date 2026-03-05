@@ -8,6 +8,7 @@ type messageRow struct {
 	ROWID           int64
 	GUID            string
 	Text            *string // nullable - some messages only have attributedBody
+	AttributedBody  []byte  // NSKeyedArchiver blob; fallback when Text is nil (macOS Ventura+)
 	Date            int64   // Apple epoch timestamp (seconds or nanoseconds)
 	IsFromMe        int
 	Service         string // "iMessage" or "SMS"

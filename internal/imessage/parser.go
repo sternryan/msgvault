@@ -5,6 +5,8 @@ import (
 	"net/mail"
 	"strings"
 	"time"
+
+	"howett.net/plist"
 )
 
 // appleEpochOffset is the number of seconds between Unix epoch (1970-01-01)
@@ -152,6 +154,60 @@ func buildMIME(fromAddr, toAddrs []string, date time.Time, messageID, body strin
 // formatMIMEAddress formats an email address for MIME headers.
 func formatMIMEAddress(addr string) string {
 	return (&mail.Address{Address: addr}).String()
+}
+
+// extractAttributedBodyText decodes an NSKeyedArchiver binary plist blob from
+// chat.db's attributedBody column and returns the plain text string.
+//
+// macOS Ventura+ / iOS 16+ stopped populating the plain-text "text" column for
+// most iMessages; the content lives exclusively in attributedBody as an
+// NSAttributedString archived via NSKeyedArchiver.
+//
+// NSKeyedArchiver structure:
+//
+//	$top    = { root: <UID N> }
+//	$objects = [ "$null", { NS.string: <UID M>, NS.attributes: … }, …, "<the text>", … ]
+//
+// We navigate $top.root → $objects[N]["NS.string"] → $objects[M] to get the string.
+func extractAttributedBodyText(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	// The binary plist root is a dict with $archiver/$top/$objects/$version keys.
+	var archive struct {
+		Top     map[string]plist.UID `plist:"$top"`
+		Objects []interface{}        `plist:"$objects"`
+	}
+	if _, err := plist.Unmarshal(data, &archive); err != nil {
+		return ""
+	}
+
+	// $top["root"] is the UID of the NSAttributedString in $objects.
+	rootUID, ok := archive.Top["root"]
+	if !ok || int(rootUID) >= len(archive.Objects) {
+		return ""
+	}
+
+	rootObj, ok := archive.Objects[rootUID].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	// "NS.string" maps to the UID of the plain NSString text object.
+	nsStringUID, ok := rootObj["NS.string"].(plist.UID)
+	if !ok {
+		return ""
+	}
+	if int(nsStringUID) >= len(archive.Objects) {
+		return ""
+	}
+
+	text, ok := archive.Objects[nsStringUID].(string)
+	if !ok {
+		return ""
+	}
+	return text
 }
 
 // snippet returns the first n characters of s, suitable for message preview.

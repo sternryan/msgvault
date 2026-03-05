@@ -56,10 +56,10 @@ type Engine interface {
 
 // TotalStats provides overall database statistics.
 type TotalStats struct {
-	MessageCount    int64
-	TotalSize       int64
-	AttachmentCount int64
-	AttachmentSize  int64
-	LabelCount      int64
-	AccountCount    int64
+	MessageCount    int64 `json:"messageCount"`
+	TotalSize       int64 `json:"totalSize"`
+	AttachmentCount int64 `json:"attachmentCount"`
+	AttachmentSize  int64 `json:"attachmentSize"`
+	LabelCount      int64 `json:"labelCount"`
+	AccountCount    int64 `json:"accountCount"`
 }
