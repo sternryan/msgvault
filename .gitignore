@@ -23,16 +23,24 @@ oauth_client*.json
 # Local development state
 .beads/
 .githooks/post-commit
+.githooks/post-rewrite
+.mcp.json
+
+# Python
+__pycache__/
+
+# Go caches
+.gocache/
+.gopath/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+.projects/
 
-# Frontend
+# Claude Code
+.claude/
 web/node_modules/
 internal/web/dist/
-
-# Obsidian
-.obsidian/

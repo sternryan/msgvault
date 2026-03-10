@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/gmail"
 	"github.com/wesm/msgvault/internal/oauth"
@@ -45,6 +46,10 @@ Examples:
   msgvault sync-full you@gmail.com --noresume    # Force fresh sync`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if syncLimit < 0 {
+			return fmt.Errorf("--limit must be a non-negative number")
+		}
+
 		// Validate config
 		if cfg.OAuth.ClientSecrets == "" {
 			return errOAuthNotConfigured()
@@ -143,9 +148,11 @@ Examples:
 }
 
 func runFullSync(ctx context.Context, s *store.Store, oauthMgr *oauth.Manager, email string) error {
-	tokenSource, err := oauthMgr.TokenSource(ctx, email)
+	interactive := isatty.IsTerminal(os.Stdin.Fd()) ||
+		isatty.IsCygwinTerminal(os.Stdin.Fd())
+	tokenSource, err := getTokenSourceWithReauth(ctx, oauthMgr, email, interactive)
 	if err != nil {
-		return fmt.Errorf("get token source: %w (run 'add-account' first)", err)
+		return err
 	}
 
 	// Create Gmail client
@@ -163,6 +170,7 @@ func runFullSync(ctx context.Context, s *store.Store, oauthMgr *oauth.Manager, e
 	opts := sync.DefaultOptions()
 	opts.Query = query
 	opts.NoResume = syncNoResume
+	opts.Limit = syncLimit
 	opts.AttachmentsDir = cfg.AttachmentsDir()
 
 	// Create syncer with progress reporter

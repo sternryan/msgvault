@@ -81,6 +81,38 @@ func TestStore_Source_UpdateSyncCursor(t *testing.T) {
 	}
 }
 
+func TestStore_Source_UpdateDisplayName(t *testing.T) {
+	f := storetest.New(t)
+
+	err := f.Store.UpdateSourceDisplayName(f.Source.ID, "Work Account")
+	testutil.MustNoErr(t, err, "UpdateSourceDisplayName()")
+
+	// Verify display name was updated
+	updated, err := f.Store.GetSourceByIdentifier("test@example.com")
+	testutil.MustNoErr(t, err, "GetSourceByIdentifier()")
+
+	if !updated.DisplayName.Valid || updated.DisplayName.String != "Work Account" {
+		t.Errorf("DisplayName = %v, want 'Work Account'", updated.DisplayName)
+	}
+}
+
+func TestStore_ListSources(t *testing.T) {
+	f := storetest.New(t)
+
+	sources, err := f.Store.ListSources("")
+	testutil.MustNoErr(t, err, "ListSources()")
+
+	if len(sources) != 1 {
+		t.Fatalf("len(sources) = %d, want 1", len(sources))
+	}
+	if sources[0].Identifier != "test@example.com" {
+		t.Errorf("Identifier = %q, want %q", sources[0].Identifier, "test@example.com")
+	}
+	if sources[0].ID != f.Source.ID {
+		t.Errorf("ID = %d, want %d", sources[0].ID, f.Source.ID)
+	}
+}
+
 func TestStore_Conversation(t *testing.T) {
 	f := storetest.New(t)
 
@@ -489,6 +521,37 @@ func TestStore_MarkMessageDeletedByGmailID(t *testing.T) {
 	testutil.MustNoErr(t, err, "MarkMessageDeletedByGmailID(nonexistent)")
 }
 
+func TestStore_MarkMessagesDeletedByGmailIDBatch(t *testing.T) {
+	f := storetest.New(t)
+
+	// Create 600+ messages to exercise multi-chunk behavior (chunkSize=500)
+	const count = 600
+	ids := make([]string, count)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("batch-del-%d", i)
+		f.CreateMessage(ids[i])
+	}
+
+	// Mark all as deleted in one batch call
+	err := f.Store.MarkMessagesDeletedByGmailIDBatch(ids)
+	testutil.MustNoErr(t, err, "MarkMessagesDeletedByGmailIDBatch")
+
+	// Verify all are marked deleted
+	var deletedCount int
+	err = f.Store.DB().QueryRow(
+		`SELECT COUNT(*) FROM messages WHERE deleted_from_source_at IS NOT NULL`,
+	).Scan(&deletedCount)
+	testutil.MustNoErr(t, err, "count deleted")
+
+	if deletedCount != count {
+		t.Errorf("deleted count = %d, want %d", deletedCount, count)
+	}
+
+	// Empty batch should be a no-op
+	err = f.Store.MarkMessagesDeletedByGmailIDBatch(nil)
+	testutil.MustNoErr(t, err, "MarkMessagesDeletedByGmailIDBatch(nil)")
+}
+
 func TestStore_GetMessageRaw_NotFound(t *testing.T) {
 	f := storetest.New(t)
 
@@ -841,6 +904,202 @@ func TestStore_ReplaceMessageRecipients_LargeBatch(t *testing.T) {
 	f.AssertRecipientCount(msgID, "to", 150)
 }
 
+func TestStore_UpsertFTS(t *testing.T) {
+	f := storetest.New(t)
+
+	if !f.Store.FTS5Available() {
+		t.Skip("FTS5 not available")
+	}
+
+	msgID := f.CreateMessage("msg-fts-1")
+
+	// Store body for the message
+	err := f.Store.UpsertMessageBody(msgID,
+		sql.NullString{String: "hello world body text", Valid: true},
+		sql.NullString{String: "<p>hello</p>", Valid: true},
+	)
+	testutil.MustNoErr(t, err, "UpsertMessageBody")
+
+	// Upsert FTS
+	err = f.Store.UpsertFTS(msgID, "Test Subject", "hello world body text", "alice@example.com", "bob@example.com", "carol@example.com")
+	testutil.MustNoErr(t, err, "UpsertFTS")
+
+	// Verify FTS row exists and is searchable
+	var count int
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'hello'").Scan(&count)
+	testutil.MustNoErr(t, err, "FTS MATCH query")
+	if count != 1 {
+		t.Errorf("FTS match count = %d, want 1", count)
+	}
+
+	// Search by subject
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'subject'").Scan(&count)
+	testutil.MustNoErr(t, err, "FTS MATCH subject")
+	if count != 1 {
+		t.Errorf("FTS match subject count = %d, want 1", count)
+	}
+
+	// Search by from address
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'alice'").Scan(&count)
+	testutil.MustNoErr(t, err, "FTS MATCH from_addr")
+	if count != 1 {
+		t.Errorf("FTS match from_addr count = %d, want 1", count)
+	}
+
+	// Replace (upsert) FTS with updated content
+	err = f.Store.UpsertFTS(msgID, "Updated Subject", "updated body", "alice@example.com", "bob@example.com", "")
+	testutil.MustNoErr(t, err, "UpsertFTS update")
+
+	// Old content should no longer match
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'hello'").Scan(&count)
+	testutil.MustNoErr(t, err, "FTS MATCH after update")
+	if count != 0 {
+		t.Errorf("FTS match 'hello' after update = %d, want 0", count)
+	}
+
+	// New content should match
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'updated'").Scan(&count)
+	testutil.MustNoErr(t, err, "FTS MATCH 'updated'")
+	if count != 1 {
+		t.Errorf("FTS match 'updated' = %d, want 1", count)
+	}
+}
+
+func TestStore_BackfillFTS(t *testing.T) {
+	f := storetest.New(t)
+
+	if !f.Store.FTS5Available() {
+		t.Skip("FTS5 not available")
+	}
+
+	// Create messages with bodies and recipients
+	msgID1 := f.CreateMessage("msg-backfill-1")
+	err := f.Store.UpsertMessageBody(msgID1,
+		sql.NullString{String: "first message body", Valid: true},
+		sql.NullString{},
+	)
+	testutil.MustNoErr(t, err, "UpsertMessageBody 1")
+
+	pid1 := f.EnsureParticipant("sender@example.com", "Sender", "example.com")
+	err = f.Store.ReplaceMessageRecipients(msgID1, "from", []int64{pid1}, []string{"Sender"})
+	testutil.MustNoErr(t, err, "ReplaceMessageRecipients from")
+
+	pid2 := f.EnsureParticipant("recipient@example.com", "Recipient", "example.com")
+	err = f.Store.ReplaceMessageRecipients(msgID1, "to", []int64{pid2}, []string{"Recipient"})
+	testutil.MustNoErr(t, err, "ReplaceMessageRecipients to")
+
+	msgID2 := f.CreateMessage("msg-backfill-2")
+	err = f.Store.UpsertMessageBody(msgID2,
+		sql.NullString{String: "second message unique content", Valid: true},
+		sql.NullString{},
+	)
+	testutil.MustNoErr(t, err, "UpsertMessageBody 2")
+
+	// FTS should already have been auto-populated by InitSchema, so clear it first
+	_, err = f.Store.DB().Exec("DELETE FROM messages_fts")
+	testutil.MustNoErr(t, err, "clear FTS")
+
+	// Verify FTS is empty
+	var count int
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts").Scan(&count)
+	testutil.MustNoErr(t, err, "count FTS")
+	if count != 0 {
+		t.Fatalf("FTS count = %d, want 0 after clear", count)
+	}
+
+	// Run backfill
+	rowsInserted, err := f.Store.BackfillFTS(nil)
+	testutil.MustNoErr(t, err, "BackfillFTS")
+	if rowsInserted != 2 {
+		t.Errorf("BackfillFTS rows = %d, want 2", rowsInserted)
+	}
+
+	// Verify FTS is populated
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts").Scan(&count)
+	testutil.MustNoErr(t, err, "count FTS after backfill")
+	if count != 2 {
+		t.Errorf("FTS count after backfill = %d, want 2", count)
+	}
+
+	// Search for first message body
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'first'").Scan(&count)
+	testutil.MustNoErr(t, err, "FTS MATCH first")
+	if count != 1 {
+		t.Errorf("FTS match 'first' = %d, want 1", count)
+	}
+
+	// Search for sender email (populated via backfill from participants)
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'sender'").Scan(&count)
+	testutil.MustNoErr(t, err, "FTS MATCH sender")
+	if count != 1 {
+		t.Errorf("FTS match 'sender' = %d, want 1", count)
+	}
+
+	// Search for second message unique content
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'unique'").Scan(&count)
+	testutil.MustNoErr(t, err, "FTS MATCH unique")
+	if count != 1 {
+		t.Errorf("FTS match 'unique' = %d, want 1", count)
+	}
+}
+
+func TestStore_FTS5Available(t *testing.T) {
+	f := storetest.New(t)
+
+	// FTS5Available should return a boolean (true on most builds)
+	available := f.Store.FTS5Available()
+	t.Logf("FTS5Available = %v", available)
+}
+
+func TestStore_NeedsFTSBackfill(t *testing.T) {
+	f := storetest.New(t)
+
+	if !f.Store.FTS5Available() {
+		t.Skip("FTS5 not available")
+	}
+
+	// Create messages with bodies so there's data to backfill
+	msgID := f.CreateMessage("msg-auto-backfill")
+	err := f.Store.UpsertMessageBody(msgID,
+		sql.NullString{String: "auto backfill test body", Valid: true},
+		sql.NullString{},
+	)
+	testutil.MustNoErr(t, err, "UpsertMessageBody")
+
+	pid := f.EnsureParticipant("autotest@example.com", "Auto", "example.com")
+	err = f.Store.ReplaceMessageRecipients(msgID, "from", []int64{pid}, []string{"Auto"})
+	testutil.MustNoErr(t, err, "ReplaceMessageRecipients")
+
+	// Clear FTS to simulate a pre-existing DB without FTS population
+	_, err = f.Store.DB().Exec("DELETE FROM messages_fts")
+	testutil.MustNoErr(t, err, "clear FTS")
+
+	// NeedsFTSBackfill should return true (empty FTS + existing messages)
+	if !f.Store.NeedsFTSBackfill() {
+		t.Fatal("NeedsFTSBackfill() = false, want true")
+	}
+
+	// Run backfill (simulating what CLI commands do after checking)
+	n, err := f.Store.BackfillFTS(nil)
+	testutil.MustNoErr(t, err, "BackfillFTS")
+	if n == 0 {
+		t.Error("BackfillFTS returned 0 rows")
+	}
+
+	// NeedsFTSBackfill should now return false
+	if f.Store.NeedsFTSBackfill() {
+		t.Error("NeedsFTSBackfill() = true after backfill, want false")
+	}
+
+	// Verify the backfilled data is searchable
+	var count int
+	err = f.Store.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'backfill'").Scan(&count)
+	testutil.MustNoErr(t, err, "FTS MATCH backfill")
+	if count != 1 {
+		t.Errorf("FTS match 'backfill' = %d, want 1", count)
+	}
+}
+
 func TestStore_ReplaceMessageLabels_LargeBatch(t *testing.T) {
 	f := storetest.New(t)
 
@@ -950,5 +1209,257 @@ func TestStore_OpenWithoutPassphrase_BackwardCompatible(t *testing.T) {
 
 	if st2.Passphrase() != "" {
 		t.Errorf("Passphrase() = %q, want empty", st2.Passphrase())
+	}
+}
+
+func TestStore_AddMessageLabels(t *testing.T) {
+	f := storetest.New(t)
+
+	msgID := f.CreateMessage("msg-add-labels")
+	labels := f.EnsureLabels(map[string]string{
+		"INBOX":   "Inbox",
+		"STARRED": "Starred",
+		"SENT":    "Sent",
+		"TRASH":   "Trash",
+	}, "system")
+
+	// Start with INBOX
+	err := f.Store.ReplaceMessageLabels(msgID, []int64{labels["INBOX"]})
+	testutil.MustNoErr(t, err, "ReplaceMessageLabels(INBOX)")
+	f.AssertLabelCount(msgID, 1)
+
+	// Add STARRED — should go from 1 to 2
+	err = f.Store.AddMessageLabels(msgID, []int64{labels["STARRED"]})
+	testutil.MustNoErr(t, err, "AddMessageLabels(STARRED)")
+	f.AssertLabelCount(msgID, 2)
+
+	// Add INBOX again — should be a no-op (INSERT OR IGNORE)
+	err = f.Store.AddMessageLabels(msgID, []int64{labels["INBOX"]})
+	testutil.MustNoErr(t, err, "AddMessageLabels(INBOX duplicate)")
+	f.AssertLabelCount(msgID, 2)
+
+	// Add multiple labels at once, including one that already exists
+	err = f.Store.AddMessageLabels(msgID, []int64{labels["SENT"], labels["TRASH"], labels["STARRED"]})
+	testutil.MustNoErr(t, err, "AddMessageLabels(SENT, TRASH, STARRED)")
+	f.AssertLabelCount(msgID, 4)
+
+	// Empty list is a no-op
+	err = f.Store.AddMessageLabels(msgID, []int64{})
+	testutil.MustNoErr(t, err, "AddMessageLabels(empty)")
+	f.AssertLabelCount(msgID, 4)
+}
+
+func TestStore_RemoveMessageLabels(t *testing.T) {
+	f := storetest.New(t)
+
+	msgID := f.CreateMessage("msg-remove-labels")
+	labels := f.EnsureLabels(map[string]string{
+		"INBOX":   "Inbox",
+		"STARRED": "Starred",
+		"SENT":    "Sent",
+		"TRASH":   "Trash",
+	}, "system")
+
+	// Start with all 4 labels
+	err := f.Store.ReplaceMessageLabels(msgID, []int64{labels["INBOX"], labels["STARRED"], labels["SENT"], labels["TRASH"]})
+	testutil.MustNoErr(t, err, "ReplaceMessageLabels")
+	f.AssertLabelCount(msgID, 4)
+
+	// Remove STARRED — should go from 4 to 3
+	err = f.Store.RemoveMessageLabels(msgID, []int64{labels["STARRED"]})
+	testutil.MustNoErr(t, err, "RemoveMessageLabels(STARRED)")
+	f.AssertLabelCount(msgID, 3)
+
+	// Remove STARRED again — should be a no-op (already removed)
+	err = f.Store.RemoveMessageLabels(msgID, []int64{labels["STARRED"]})
+	testutil.MustNoErr(t, err, "RemoveMessageLabels(STARRED again)")
+	f.AssertLabelCount(msgID, 3)
+
+	// Remove multiple including INBOX and SENT
+	err = f.Store.RemoveMessageLabels(msgID, []int64{labels["INBOX"], labels["SENT"]})
+	testutil.MustNoErr(t, err, "RemoveMessageLabels(INBOX, SENT)")
+	f.AssertLabelCount(msgID, 1)
+
+	// Verify the remaining label is TRASH
+	labelID := f.GetSingleLabelID(msgID)
+	if labelID != labels["TRASH"] {
+		t.Errorf("remaining label_id = %d, want %d (TRASH)", labelID, labels["TRASH"])
+	}
+
+	// Empty list is a no-op
+	err = f.Store.RemoveMessageLabels(msgID, []int64{})
+	testutil.MustNoErr(t, err, "RemoveMessageLabels(empty)")
+	f.AssertLabelCount(msgID, 1)
+}
+
+func TestStore_MarkMessagesDeletedBatch(t *testing.T) {
+	f := storetest.New(t)
+
+	// Create several messages
+	msgIDs := []string{"batch-del-1", "batch-del-2", "batch-del-3", "batch-del-4"}
+	internalIDs := make(map[string]int64)
+	for _, id := range msgIDs {
+		internalIDs[id] = f.CreateMessage(id)
+	}
+
+	// Verify none are deleted
+	for _, id := range msgIDs {
+		f.AssertMessageNotDeleted(internalIDs[id])
+	}
+
+	// Batch delete first two
+	err := f.Store.MarkMessagesDeletedBatch(f.Source.ID, []string{"batch-del-1", "batch-del-2"})
+	testutil.MustNoErr(t, err, "MarkMessagesDeletedBatch")
+
+	// First two should be deleted, last two should not
+	f.AssertMessageDeleted(internalIDs["batch-del-1"])
+	f.AssertMessageDeleted(internalIDs["batch-del-2"])
+	f.AssertMessageNotDeleted(internalIDs["batch-del-3"])
+	f.AssertMessageNotDeleted(internalIDs["batch-del-4"])
+
+	// Batch with non-existent IDs should not error
+	err = f.Store.MarkMessagesDeletedBatch(f.Source.ID, []string{"nonexistent-1", "nonexistent-2"})
+	testutil.MustNoErr(t, err, "MarkMessagesDeletedBatch(nonexistent)")
+
+	// Empty list is a no-op
+	err = f.Store.MarkMessagesDeletedBatch(f.Source.ID, []string{})
+	testutil.MustNoErr(t, err, "MarkMessagesDeletedBatch(empty)")
+}
+
+func TestStore_PersistMessage(t *testing.T) {
+	f := storetest.New(t)
+
+	pid1 := f.EnsureParticipant("alice@example.com", "Alice", "example.com")
+	pid2 := f.EnsureParticipant("bob@example.org", "Bob", "example.org")
+
+	labels := f.EnsureLabels(map[string]string{
+		"INBOX":   "Inbox",
+		"STARRED": "Starred",
+	}, "system")
+
+	msg := storetest.NewMessage(f.Source.ID, f.ConvID).
+		WithSourceMessageID("persist-1").
+		WithSubject("Hello").
+		WithSnippet("preview").
+		WithSize(1024).
+		Build()
+
+	data := &store.MessagePersistData{
+		Message:  msg,
+		BodyText: sql.NullString{String: "body text", Valid: true},
+		BodyHTML: sql.NullString{String: "<p>body</p>", Valid: true},
+		RawMIME:  sampleRawMessage,
+		Recipients: []store.RecipientSet{
+			{Type: "from", ParticipantIDs: []int64{pid1}, DisplayNames: []string{"Alice"}},
+			{Type: "to", ParticipantIDs: []int64{pid2}, DisplayNames: []string{"Bob"}},
+		},
+		LabelIDs: []int64{labels["INBOX"], labels["STARRED"]},
+	}
+
+	messageID, err := f.Store.PersistMessage(data)
+	testutil.MustNoErr(t, err, "PersistMessage")
+	if messageID == 0 {
+		t.Fatal("message ID should be non-zero")
+	}
+
+	// Verify message fields
+	got := f.GetMessageFields(messageID)
+	if got.Subject != "Hello" {
+		t.Errorf("subject = %q, want %q", got.Subject, "Hello")
+	}
+
+	// Verify body
+	bodyText, bodyHTML := f.GetMessageBody(messageID)
+	if bodyText.String != "body text" {
+		t.Errorf("body_text = %q, want %q", bodyText.String, "body text")
+	}
+	if bodyHTML.String != "<p>body</p>" {
+		t.Errorf("body_html = %q, want %q", bodyHTML.String, "<p>body</p>")
+	}
+
+	// Verify raw MIME
+	raw, err := f.Store.GetMessageRaw(messageID)
+	testutil.MustNoErr(t, err, "GetMessageRaw")
+	if string(raw) != string(sampleRawMessage) {
+		t.Errorf("raw = %q, want %q", raw, sampleRawMessage)
+	}
+
+	// Verify recipients
+	f.AssertRecipientCount(messageID, "from", 1)
+	f.AssertRecipientCount(messageID, "to", 1)
+
+	// Verify labels
+	f.AssertLabelCount(messageID, 2)
+}
+
+func TestStore_PersistMessage_Atomicity(t *testing.T) {
+	f := storetest.New(t)
+
+	msg := storetest.NewMessage(f.Source.ID, f.ConvID).
+		WithSourceMessageID("persist-atomic").
+		WithSubject("Atomic Test").
+		Build()
+
+	// Use a non-existent label ID to trigger an FK violation
+	// during replaceMessageLabelsTx, which should roll back
+	// the entire transaction including the message insert.
+	data := &store.MessagePersistData{
+		Message:  msg,
+		BodyText: sql.NullString{String: "text", Valid: true},
+		RawMIME:  sampleRawMessage,
+		LabelIDs: []int64{999999},
+	}
+
+	_, err := f.Store.PersistMessage(data)
+	if err == nil {
+		t.Fatal("PersistMessage should fail with invalid label ID")
+	}
+
+	// Verify the message was NOT committed
+	existing, err := f.Store.MessageExistsBatch(f.Source.ID, []string{"persist-atomic"})
+	testutil.MustNoErr(t, err, "MessageExistsBatch")
+	if len(existing) != 0 {
+		t.Errorf("message should not exist after failed PersistMessage, found %d", len(existing))
+	}
+}
+
+func TestStore_PersistMessage_Upsert(t *testing.T) {
+	f := storetest.New(t)
+
+	msg := storetest.NewMessage(f.Source.ID, f.ConvID).
+		WithSourceMessageID("persist-upsert").
+		WithSubject("Original").
+		WithSnippet("preview").
+		Build()
+
+	data := &store.MessagePersistData{
+		Message:  msg,
+		BodyText: sql.NullString{String: "original body", Valid: true},
+		RawMIME:  sampleRawMessage,
+	}
+
+	msgID1, err := f.Store.PersistMessage(data)
+	testutil.MustNoErr(t, err, "PersistMessage first call")
+
+	// Update the message with different body
+	msg.Subject = sql.NullString{String: "Updated", Valid: true}
+	data.BodyText = sql.NullString{String: "updated body", Valid: true}
+
+	msgID2, err := f.Store.PersistMessage(data)
+	testutil.MustNoErr(t, err, "PersistMessage second call")
+
+	if msgID2 != msgID1 {
+		t.Errorf("second call ID = %d, want %d", msgID2, msgID1)
+	}
+
+	// Verify updated fields
+	got := f.GetMessageFields(msgID1)
+	if got.Subject != "Updated" {
+		t.Errorf("subject = %q, want %q", got.Subject, "Updated")
+	}
+
+	bodyText, _ := f.GetMessageBody(msgID1)
+	if bodyText.String != "updated body" {
+		t.Errorf("body_text = %q, want %q", bodyText.String, "updated body")
 	}
 }

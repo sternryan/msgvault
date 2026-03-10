@@ -1,276 +1,360 @@
 package mbox
 
 import (
+	"errors"
 	"io"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 )
 
-const singleMessageMbox = `From sender@example.com Mon Jan  1 00:00:00 2024
-Message-ID: <msg1@example.com>
-From: sender@example.com
-To: recipient@example.com
-Subject: Test message 1
-Date: Mon, 01 Jan 2024 00:00:00 +0000
+func TestReader_Next_SplitsAndUnescapes(t *testing.T) {
+	mboxData := strings.Join([]string{
+		"From sender@example.com Mon Jan 1 00:00:00 2024",
+		"Subject: One",
+		"",
+		">From should-unescape",
+		">>From keep-one",
+		"Normal",
+		"",
+		"From sender@example.com Mon Jan 1 00:00:01 2024",
+		"Subject: Two",
+		"",
+		"Body2",
+		"",
+	}, "\n")
 
-This is the body of message 1.
-`
+	r := NewReader(strings.NewReader(mboxData))
 
-const multipleMessagesMbox = `From sender@example.com Mon Jan  1 00:00:00 2024
-Message-ID: <msg1@example.com>
-From: sender@example.com
-To: recipient@example.com
-Subject: Test message 1
-Date: Mon, 01 Jan 2024 00:00:00 +0000
-
-This is the body of message 1.
-
-From sender2@example.com Tue Jan  2 00:00:00 2024
-Message-ID: <msg2@example.com>
-From: sender2@example.com
-To: recipient@example.com
-Subject: Test message 2
-Date: Tue, 02 Jan 2024 00:00:00 +0000
-
-This is the body of message 2.
-
-From sender3@example.com Wed Jan  3 00:00:00 2024
-Message-ID: <msg3@example.com>
-From: sender3@example.com
-To: recipient@example.com
-Subject: Test message 3
-Date: Wed, 03 Jan 2024 00:00:00 +0000
-
-This is the body of message 3.
-`
-
-const escapedFromMbox = `From sender@example.com Mon Jan  1 00:00:00 2024
-Message-ID: <esc1@example.com>
-From: sender@example.com
-To: recipient@example.com
-Subject: Escaped from line test
-Date: Mon, 01 Jan 2024 00:00:00 +0000
-
-This message has escaped From lines:
->From the beginning of time.
->>From even more escaped.
-Normal line here.
-`
-
-func writeTempMbox(t *testing.T, content string) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.mbox")
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func TestReaderSingleMessage(t *testing.T) {
-	path := writeTempMbox(t, singleMessageMbox)
-	r, err := NewReader(path)
+	msg1, err := r.Next()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Next(): %v", err)
 	}
-	defer r.Close()
+	if got := msg1.FromLine; !strings.HasPrefix(got, "From sender@example.com") {
+		t.Fatalf("FromLine mismatch: %q", got)
+	}
+	raw1 := string(msg1.Raw)
+	if !strings.Contains(raw1, "From should-unescape\n") {
+		t.Fatalf("expected unescaped From line, got raw:\n%s", raw1)
+	}
+	if !strings.Contains(raw1, ">From keep-one\n") {
+		t.Fatalf("expected unescaped >>From -> >From, got raw:\n%s", raw1)
+	}
+	if strings.Contains(raw1, ">>From keep-one\n") {
+		t.Fatalf("expected mboxrd unescape to remove one '>', got raw:\n%s", raw1)
+	}
 
-	entry, err := r.Next()
+	msg2, err := r.Next()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Next() (msg2): %v", err)
 	}
-
-	if entry.Offset != 0 {
-		t.Errorf("expected offset 0, got %d", entry.Offset)
+	raw2 := string(msg2.Raw)
+	if !strings.Contains(raw2, "Subject: Two\n") || !strings.Contains(raw2, "\n\nBody2\n") {
+		t.Fatalf("unexpected msg2 raw:\n%s", raw2)
 	}
-
-	body := string(entry.Raw)
-	if !contains(body, "Message-ID: <msg1@example.com>") {
-		t.Errorf("expected Message-ID header in raw, got:\n%s", body)
-	}
-	if !contains(body, "This is the body of message 1.") {
-		t.Errorf("expected body in raw, got:\n%s", body)
-	}
-
-	// Should get EOF on next call.
-	_, err = r.Next()
-	if err != io.EOF {
-		t.Errorf("expected io.EOF, got %v", err)
-	}
-}
-
-func TestReaderMultipleMessages(t *testing.T) {
-	path := writeTempMbox(t, multipleMessagesMbox)
-	r, err := NewReader(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-
-	var entries []*RawEntry
-	for {
-		entry, err := r.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		entries = append(entries, entry)
-	}
-
-	if len(entries) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(entries))
-	}
-
-	// Verify each message has its own Message-ID.
-	for i, expected := range []string{"<msg1@example.com>", "<msg2@example.com>", "<msg3@example.com>"} {
-		if !contains(string(entries[i].Raw), "Message-ID: "+expected) {
-			t.Errorf("message %d: expected Message-ID %s", i, expected)
-		}
-	}
-
-	// Verify offsets are increasing.
-	for i := 1; i < len(entries); i++ {
-		if entries[i].Offset <= entries[i-1].Offset {
-			t.Errorf("offsets not increasing: [%d]=%d, [%d]=%d",
-				i-1, entries[i-1].Offset, i, entries[i].Offset)
-		}
-	}
-}
-
-func TestReaderFromEscaping(t *testing.T) {
-	path := writeTempMbox(t, escapedFromMbox)
-	r, err := NewReader(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-
-	entry, err := r.Next()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	body := string(entry.Raw)
-	// ">From " should be unescaped to "From ".
-	if !contains(body, "From the beginning of time.") {
-		t.Errorf("expected unescaped 'From ' line, got:\n%s", body)
-	}
-	// ">>From " should be unescaped to ">From ".
-	if !contains(body, ">From even more escaped.") {
-		t.Errorf("expected unescaped '>From ' line, got:\n%s", body)
-	}
-}
-
-func TestReaderSeekResume(t *testing.T) {
-	path := writeTempMbox(t, multipleMessagesMbox)
-
-	// First pass: read all messages and record offsets.
-	r, err := NewReader(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var offsets []int64
-	for {
-		entry, err := r.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		offsets = append(offsets, entry.Offset)
-	}
-	r.Close()
-
-	if len(offsets) != 3 {
-		t.Fatalf("expected 3 offsets, got %d", len(offsets))
-	}
-
-	// Resume from the second message's offset.
-	r2, err := NewReader(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r2.Close()
-
-	if err := r2.SeekTo(offsets[1]); err != nil {
-		t.Fatal(err)
-	}
-
-	entry, err := r2.Next()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !contains(string(entry.Raw), "Message-ID: <msg2@example.com>") {
-		t.Error("expected to resume at message 2")
-	}
-
-	entry, err = r2.Next()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !contains(string(entry.Raw), "Message-ID: <msg3@example.com>") {
-		t.Error("expected message 3 after resume")
-	}
-
-	_, err = r2.Next()
-	if err != io.EOF {
-		t.Errorf("expected io.EOF after last message, got %v", err)
-	}
-}
-
-func TestReaderEmptyMbox(t *testing.T) {
-	path := writeTempMbox(t, "")
-	r, err := NewReader(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
 
 	_, err = r.Next()
 	if err != io.EOF {
-		t.Errorf("expected io.EOF for empty mbox, got %v", err)
+		t.Fatalf("expected EOF, got: %v", err)
 	}
 }
 
-func TestCountMessages(t *testing.T) {
-	tests := []struct {
-		name     string
-		content  string
-		expected int64
-	}{
-		{"empty", "", 0},
-		{"single", singleMessageMbox, 1},
-		{"multiple", multipleMessagesMbox, 3},
-	}
+func TestReader_Next_CanDisableUnescape(t *testing.T) {
+	mboxData := strings.Join([]string{
+		"From sender@example.com Mon Jan 1 00:00:00 2024",
+		"Subject: One",
+		"",
+		">From should-stay-escaped",
+		"",
+	}, "\n")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := writeTempMbox(t, tt.content)
-			count, err := CountMessages(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if count != tt.expected {
-				t.Errorf("expected %d, got %d", tt.expected, count)
-			}
-		})
+	r := NewReader(strings.NewReader(mboxData))
+	r.SetUnescapeFrom(false)
+
+	msg, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next(): %v", err)
+	}
+	raw := string(msg.Raw)
+	if !strings.Contains(raw, ">From should-stay-escaped\n") {
+		t.Fatalf("expected no unescaping, got raw:\n%s", raw)
+	}
+	if strings.Contains(raw, "\n\nFrom should-stay-escaped\n") {
+		t.Fatalf("expected >From line to remain escaped, got raw:\n%s", raw)
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchSubstr(s, substr)
+func TestReader_Next_AllowsLongLines(t *testing.T) {
+	longValue := strings.Repeat("a", 10_000)
+	mboxData := strings.Join([]string{
+		"From sender@example.com Mon Jan 1 00:00:00 2024",
+		"Subject: One",
+		"X-Long: " + longValue,
+		"",
+		"Body1",
+		"",
+		"From sender@example.com Mon Jan 1 00:00:01 2024",
+		"Subject: Two",
+		"",
+		"Body2",
+		"",
+	}, "\n")
+
+	r := NewReader(strings.NewReader(mboxData))
+
+	msg1, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg1): %v", err)
+	}
+	if !strings.Contains(string(msg1.Raw), "X-Long: "+longValue+"\n") {
+		t.Fatalf("expected full long header line, got raw:\n%s", string(msg1.Raw))
+	}
+
+	msg2, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg2): %v", err)
+	}
+	if !strings.Contains(string(msg2.Raw), "Subject: Two\n") {
+		t.Fatalf("unexpected msg2 raw:\n%s", string(msg2.Raw))
+	}
+
+	_, err = r.Next()
+	if err != io.EOF {
+		t.Fatalf("expected EOF, got: %v", err)
+	}
 }
 
-func searchSubstr(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func TestReader_Next_EnforcesMaxMessageBytesAndContinues(t *testing.T) {
+	mboxData := strings.Join([]string{
+		"From sender@example.com Mon Jan 1 00:00:00 2024",
+		"Subject: " + strings.Repeat("a", 200),
+		"",
+		"Body1",
+		"",
+		"From sender@example.com Mon Jan 1 00:00:01 2024",
+		"Subject: Two",
+		"",
+		"Body2",
+		"",
+	}, "\n")
+
+	r := NewReaderWithMaxMessageBytes(strings.NewReader(mboxData), 64)
+
+	_, err := r.Next()
+	if err == nil || !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("expected ErrMessageTooLarge, got: %v", err)
 	}
-	return false
+
+	msg2, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg2): %v", err)
+	}
+	if !strings.Contains(string(msg2.Raw), "Subject: Two\n") {
+		t.Fatalf("unexpected msg2 raw:\n%s", string(msg2.Raw))
+	}
+}
+
+func TestReader_Next_DoesNotSplitOnUnescapedFromInBody(t *testing.T) {
+	mboxData := strings.Join([]string{
+		"From sender@example.com Mon Jan 1 00:00:00 2024",
+		"Subject: One",
+		"",
+		"Body1",
+		"From this is not a separator",
+		"Body3",
+		"",
+		"From sender@example.com Mon Jan 1 00:00:01 2024",
+		"Subject: Two",
+		"",
+		"Body2",
+		"",
+	}, "\n")
+
+	r := NewReader(strings.NewReader(mboxData))
+
+	msg1, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg1): %v", err)
+	}
+	if !strings.Contains(string(msg1.Raw), "From this is not a separator\n") {
+		t.Fatalf("expected body to contain unescaped From line, got raw:\n%s", string(msg1.Raw))
+	}
+
+	msg2, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg2): %v", err)
+	}
+	if !strings.Contains(string(msg2.Raw), "Subject: Two\n") {
+		t.Fatalf("unexpected msg2 raw:\n%s", string(msg2.Raw))
+	}
+
+	_, err = r.Next()
+	if err != io.EOF {
+		t.Fatalf("expected EOF, got: %v", err)
+	}
+}
+
+func TestReader_Next_AcceptsNamedTimezoneSeparators(t *testing.T) {
+	mboxData := strings.Join([]string{
+		"From sender@example.com Mon Jan 1 00:00:00 MST 2024",
+		"Subject: One",
+		"",
+		"Body1",
+		"",
+		"From sender@example.com Mon Jan 1 00:00:01 MST 2024",
+		"Subject: Two",
+		"",
+		"Body2",
+		"",
+	}, "\n")
+
+	r := NewReader(strings.NewReader(mboxData))
+
+	msg1, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg1): %v", err)
+	}
+	if !strings.Contains(string(msg1.Raw), "Subject: One\n") {
+		t.Fatalf("unexpected msg1 raw:\n%s", string(msg1.Raw))
+	}
+
+	msg2, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg2): %v", err)
+	}
+	if !strings.Contains(string(msg2.Raw), "Subject: Two\n") {
+		t.Fatalf("unexpected msg2 raw:\n%s", string(msg2.Raw))
+	}
+
+	_, err = r.Next()
+	if err != io.EOF {
+		t.Fatalf("expected EOF, got: %v", err)
+	}
+}
+
+func TestReader_Next_AcceptsRemoteFromSuffixSeparators(t *testing.T) {
+	mboxData := strings.Join([]string{
+		"From sender@example.com Mon Jan 1 00:00:00 2024 remote from mail.example.com",
+		"Subject: One",
+		"",
+		"Body1",
+		"",
+		"From sender@example.com Mon Jan 1 00:00:01 2024 remote from mail.example.com",
+		"Subject: Two",
+		"",
+		"Body2",
+		"",
+	}, "\n")
+
+	r := NewReader(strings.NewReader(mboxData))
+
+	msg1, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg1): %v", err)
+	}
+	if !strings.Contains(string(msg1.Raw), "Subject: One\n") {
+		t.Fatalf("unexpected msg1 raw:\n%s", string(msg1.Raw))
+	}
+
+	msg2, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg2): %v", err)
+	}
+	if !strings.Contains(string(msg2.Raw), "Subject: Two\n") {
+		t.Fatalf("unexpected msg2 raw:\n%s", string(msg2.Raw))
+	}
+
+	_, err = r.Next()
+	if err != io.EOF {
+		t.Fatalf("expected EOF, got: %v", err)
+	}
+}
+
+func TestReader_Next_AcceptsNoSecondsSeparators(t *testing.T) {
+	mboxData := strings.Join([]string{
+		"From sender@example.com Mon Jan 1 00:00 2024",
+		"Subject: One",
+		"",
+		"Body1",
+		"",
+		"From sender@example.com Mon Jan 1 00:01 2024",
+		"Subject: Two",
+		"",
+		"Body2",
+		"",
+	}, "\n")
+
+	r := NewReader(strings.NewReader(mboxData))
+
+	msg1, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg1): %v", err)
+	}
+	if !strings.Contains(string(msg1.Raw), "Subject: One\n") {
+		t.Fatalf("unexpected msg1 raw:\n%s", string(msg1.Raw))
+	}
+
+	msg2, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next() (msg2): %v", err)
+	}
+	if !strings.Contains(string(msg2.Raw), "Subject: Two\n") {
+		t.Fatalf("unexpected msg2 raw:\n%s", string(msg2.Raw))
+	}
+
+	_, err = r.Next()
+	if err != io.EOF {
+		t.Fatalf("expected EOF, got: %v", err)
+	}
+}
+
+func TestReader_Offset_RespectsSeekPosition(t *testing.T) {
+	mboxData := strings.Join([]string{
+		"From a@example.com Mon Jan 1 00:00:00 2024",
+		"Subject: One",
+		"",
+		"Body1",
+		"",
+		"From b@example.com Mon Jan 1 00:00:01 2024",
+		"Subject: Two",
+		"",
+		"Body2",
+		"",
+	}, "\n")
+
+	start := strings.Index(mboxData, "From b@example.com")
+	if start < 0 {
+		t.Fatalf("missing second From line")
+	}
+
+	sr := strings.NewReader(mboxData)
+	if _, err := sr.Seek(int64(start), io.SeekStart); err != nil {
+		t.Fatalf("Seek(): %v", err)
+	}
+
+	r := NewReader(sr)
+	if got := r.Offset(); got != int64(start) {
+		t.Fatalf("Offset() = %d, want %d", got, start)
+	}
+
+	msg, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next(): %v", err)
+	}
+	if !strings.HasPrefix(msg.FromLine, "From b@example.com") {
+		t.Fatalf("unexpected FromLine: %q", msg.FromLine)
+	}
+}
+
+func TestValidate_FindsSeparator(t *testing.T) {
+	data := "not mbox\nFrom a@b Sat Jan 1 00:00:00 2024\nSubject: x\n\nBody\n"
+	if err := Validate(strings.NewReader(data), 1024); err != nil {
+		t.Fatalf("Validate(): %v", err)
+	}
+}
+
+func TestValidate_FindsSeparator_WithRemoteFromSuffix(t *testing.T) {
+	data := "not mbox\nFrom a@b Sat Jan 1 00:00:00 2024 remote from mail.example.com\nSubject: x\n\nBody\n"
+	if err := Validate(strings.NewReader(data), 1024); err != nil {
+		t.Fatalf("Validate(): %v", err)
+	}
 }

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/backup"
 	"github.com/wesm/msgvault/internal/deletion"
@@ -424,6 +425,11 @@ Examples:
 		}
 		defer s.Close()
 
+		// Ensure schema is up to date (creates new indexes, etc.)
+		if err := s.InitSchema(); err != nil {
+			return fmt.Errorf("init schema: %w", err)
+		}
+
 		// Set up context with cancellation
 		ctx, cancel := context.WithCancel(cmd.Context())
 		defer cancel()
@@ -477,9 +483,11 @@ Examples:
 			// If no scope metadata at all (legacy token), fall through to reactive detection
 		}
 
-		tokenSource, err := oauthMgr.TokenSource(ctx, account)
+		interactive := isatty.IsTerminal(os.Stdin.Fd()) ||
+			isatty.IsCygwinTerminal(os.Stdin.Fd())
+		tokenSource, err := getTokenSourceWithReauth(ctx, oauthMgr, account, interactive)
 		if err != nil {
-			return fmt.Errorf("get token source: %w", err)
+			return err
 		}
 
 		// Create Gmail client
@@ -544,6 +552,19 @@ Examples:
 		}
 
 		fmt.Println("\nDeletion complete!")
+
+		// Refresh analytics cache to reflect deleted messages
+		analyticsDir := cfg.AnalyticsDir()
+		if _, err := os.Stat(analyticsDir); err == nil {
+			fmt.Println("\nRefreshing analytics cache...")
+			if result, err := buildCache(dbPath, analyticsDir, true); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to refresh cache: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Run 'msgvault build-cache --full-rebuild' manually to update.\n")
+			} else if !result.Skipped {
+				fmt.Printf("Cache refreshed (%d messages).\n", result.ExportedCount)
+			}
+		}
+
 		return nil
 	},
 }
@@ -559,19 +580,21 @@ func isTTY() bool {
 
 // CLIDeletionProgress reports deletion progress to the terminal.
 type CLIDeletionProgress struct {
-	total     int
-	startTime time.Time
-	lastPrint time.Time
-	tty       bool
+	total        int
+	resumeOffset int // messages already processed before this run
+	startTime    time.Time
+	lastPrint    time.Time
+	tty          bool
 }
 
-func (p *CLIDeletionProgress) OnStart(total int) {
+func (p *CLIDeletionProgress) OnStart(total, alreadyProcessed int) {
 	p.total = total
+	p.resumeOffset = alreadyProcessed
 	p.startTime = time.Now()
 	p.lastPrint = time.Time{} // Force first print
 	p.tty = isTTY()
 	// Show initial progress immediately so it doesn't look like it's hanging
-	p.OnProgress(0, 0, 0)
+	p.OnProgress(alreadyProcessed, 0, 0)
 }
 
 func (p *CLIDeletionProgress) formatDuration(d time.Duration) string {
@@ -596,8 +619,9 @@ func (p *CLIDeletionProgress) OnProgress(processed, succeeded, failed int) {
 	bar := p.progressBar(pct, 30)
 
 	var eta string
-	if processed > 0 && processed < p.total {
-		remaining := time.Duration(float64(elapsed) / float64(processed) * float64(p.total-processed))
+	processedThisRun := processed - p.resumeOffset
+	if processedThisRun > 0 && processed < p.total {
+		remaining := time.Duration(float64(elapsed) / float64(processedThisRun) * float64(p.total-processed))
 		eta = p.formatDuration(remaining) + " remaining"
 	} else if processed >= p.total {
 		eta = p.formatDuration(elapsed) + " elapsed"

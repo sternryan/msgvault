@@ -36,6 +36,11 @@ type viewState struct {
 	searchQuery      string              // Active search query (for aggregate filtering)
 	searchFilter     query.MessageFilter // Context filter applied to search
 
+	// Message list pagination
+	msgListOffset      int  // Current offset for non-search message pagination
+	msgListLoadingMore bool // True when loading additional message pages
+	msgListComplete    bool // True when all pages have been loaded (no more data)
+
 	// Data
 	rows          []query.AggregateRow
 	messages      []query.MessageSummary
@@ -79,8 +84,18 @@ func calculateScrollOffset(cursor, currentOffset, pageSize int) int {
 	return currentOffset
 }
 
+// visibleRows returns the number of data rows visible in the viewport.
+// Views reserve one row for the info/notification line, so this is pageSize-1.
+func (m *Model) visibleRows() int {
+	v := m.pageSize - 1
+	if v < 1 {
+		return 1
+	}
+	return v
+}
+
 func (m *Model) ensureThreadCursorVisible() {
-	m.threadScrollOffset = calculateScrollOffset(m.threadCursor, m.threadScrollOffset, m.pageSize)
+	m.threadScrollOffset = calculateScrollOffset(m.threadCursor, m.threadScrollOffset, m.visibleRows())
 }
 
 func (m Model) navigateDetailPrev() (tea.Model, tea.Cmd) {
@@ -169,11 +184,16 @@ func (m Model) goBack() (tea.Model, tea.Cmd) {
 	m.err = nil       // Clear any stale error
 	m.loading = false // Data is restored from snapshot
 
+	// Reset loading-more flag: any in-flight pagination request from the
+	// snapshotted view is stale (loadRequestID has changed), so clear the
+	// flag to allow fresh pagination.
+	m.msgListLoadingMore = false
+
 	return m, nil
 }
 
 func (m *Model) ensureCursorVisible() {
-	m.scrollOffset = calculateScrollOffset(m.cursor, m.scrollOffset, m.pageSize)
+	m.scrollOffset = calculateScrollOffset(m.cursor, m.scrollOffset, m.visibleRows())
 }
 
 func (m *Model) pushBreadcrumb() {
@@ -195,20 +215,35 @@ func (m *Model) navigateList(key string, itemCount int) bool {
 			changed = true
 		}
 	case "pgup", "ctrl+u":
-		m.cursor -= m.pageSize
+		step := m.visibleRows()
+		m.cursor -= step
+		m.scrollOffset -= step
 		if m.cursor < 0 {
 			m.cursor = 0
 		}
-		changed = true
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
+		}
+		return true
 	case "pgdown", "ctrl+d":
-		m.cursor += m.pageSize
+		step := m.visibleRows()
+		m.cursor += step
+		m.scrollOffset += step
 		if m.cursor >= itemCount {
 			m.cursor = itemCount - 1
 		}
 		if m.cursor < 0 {
 			m.cursor = 0
 		}
-		changed = true
+		// Clamp scroll so cursor stays visible and we don't scroll past the end
+		maxScroll := itemCount - m.visibleRows()
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.scrollOffset > maxScroll {
+			m.scrollOffset = maxScroll
+		}
+		return true
 	case "home":
 		m.cursor = 0
 		m.scrollOffset = 0

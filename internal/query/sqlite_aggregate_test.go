@@ -317,6 +317,69 @@ func TestSubAggregateIncludesDeletedMessages(t *testing.T) {
 	}
 }
 
+func TestHideDeletedFromSourceAggregate(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Before deletion: all 5 messages visible
+	opts := DefaultAggregateOptions()
+	allRows, err := env.Engine.Aggregate(env.Ctx, ViewSenders, opts)
+	if err != nil {
+		t.Fatalf("Aggregate: %v", err)
+	}
+	var totalBefore int64
+	for _, r := range allRows {
+		totalBefore += r.Count
+	}
+	if totalBefore != 5 {
+		t.Fatalf("expected 5 total messages before deletion, got %d", totalBefore)
+	}
+
+	// Mark message 1 as deleted
+	env.MarkDeletedByID(1)
+
+	// Without HideDeletedFromSource: deleted messages still included
+	rows, err := env.Engine.Aggregate(env.Ctx, ViewSenders, opts)
+	if err != nil {
+		t.Fatalf("Aggregate (no hide): %v", err)
+	}
+	var totalWithDeleted int64
+	for _, r := range rows {
+		totalWithDeleted += r.Count
+	}
+	if totalWithDeleted != 5 {
+		t.Errorf("expected 5 messages (deleted included), got %d", totalWithDeleted)
+	}
+
+	// With HideDeletedFromSource: deleted messages excluded
+	opts.HideDeletedFromSource = true
+	rows, err = env.Engine.Aggregate(env.Ctx, ViewSenders, opts)
+	if err != nil {
+		t.Fatalf("Aggregate (hide deleted): %v", err)
+	}
+	var totalHidden int64
+	for _, r := range rows {
+		totalHidden += r.Count
+	}
+	if totalHidden != 4 {
+		t.Errorf("expected 4 messages (deleted hidden), got %d", totalHidden)
+	}
+
+	// SubAggregate with HideDeletedFromSource
+	filter := MessageFilter{Sender: "alice@example.com", HideDeletedFromSource: true}
+	subRows, err := env.Engine.SubAggregate(env.Ctx, filter, ViewRecipients, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("SubAggregate (hide deleted): %v", err)
+	}
+	var subTotal int64
+	for _, r := range subRows {
+		subTotal += r.Count
+	}
+	// alice has 3 messages, but message 1 is deleted, so 2 should remain
+	if subTotal != 2 {
+		t.Errorf("expected 2 messages for alice (deleted hidden), got %d", subTotal)
+	}
+}
+
 func TestSubAggregateByTime(t *testing.T) {
 	env := newTestEnv(t)
 
@@ -463,6 +526,139 @@ func TestAggregateDeterministicOrderOnTies(t *testing.T) {
 		{"Apple", 1},
 		{"Zebra", 1},
 	})
+}
+
+// TestAggregateByLabel_WithSearchQuery verifies that label: search in the
+// Labels aggregate view only shows matching labels (case-insensitive substring).
+func TestAggregateByLabel_WithSearchQuery(t *testing.T) {
+	env := newTestEnv(t)
+
+	tests := []struct {
+		name       string
+		query      string
+		wantLabels []string
+	}{
+		{
+			name:       "case_insensitive",
+			query:      "label:work",
+			wantLabels: []string{"Work"},
+		},
+		{
+			name:       "substring",
+			query:      "label:wor",
+			wantLabels: []string{"Work"},
+		},
+		{
+			name:       "multi_label_or",
+			query:      "label:work label:important",
+			wantLabels: []string{"Work", "IMPORTANT"},
+		},
+		{
+			name:       "no_match",
+			query:      "label:nonexistent",
+			wantLabels: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := DefaultAggregateOptions()
+			opts.SearchQuery = tt.query
+			rows, err := env.Engine.Aggregate(
+				env.Ctx, ViewLabels, opts,
+			)
+			if err != nil {
+				t.Fatalf("Aggregate: %v", err)
+			}
+			gotLabels := make([]string, 0, len(rows))
+			for _, r := range rows {
+				gotLabels = append(gotLabels, r.Key)
+			}
+			if len(gotLabels) != len(tt.wantLabels) {
+				t.Errorf("got %d labels %v, want %d %v",
+					len(gotLabels), gotLabels,
+					len(tt.wantLabels), tt.wantLabels)
+				return
+			}
+			for i, want := range tt.wantLabels {
+				if gotLabels[i] != want {
+					t.Errorf("label[%d] = %q, want %q",
+						i, gotLabels[i], want)
+				}
+			}
+		})
+	}
+}
+
+// TestSubAggregate_WithSearchQuery verifies that SubAggregate applies
+// SearchQuery to filter results (not silently dropped).
+func TestSubAggregate_WithSearchQuery(t *testing.T) {
+	env := newTestEnv(t)
+
+	// SubAggregate by Labels under sender alice, search "work"
+	opts := DefaultAggregateOptions()
+	opts.SearchQuery = "label:work"
+	filter := MessageFilter{Sender: "alice@example.com"}
+	rows, err := env.Engine.SubAggregate(
+		env.Ctx, filter, ViewLabels, opts,
+	)
+	if err != nil {
+		t.Fatalf("SubAggregate: %v", err)
+	}
+	// Should return exactly the "Work" label, not all labels for alice
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 label row, got %d: %v", len(rows), rows)
+	}
+	if rows[0].Key != "Work" {
+		t.Errorf("expected label Work, got %q", rows[0].Key)
+	}
+}
+
+// TestEscapeSQLiteLike verifies that wildcard characters are escaped
+// so they match literally in label search.
+func TestEscapeSQLiteLike(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"work", "work"},
+		{"100%", `100\%`},
+		{"in_box", `in\_box`},
+		{`path\raw`, `path\\raw`},
+		{`%_\`, `\%\_\\`},
+	}
+	for _, tt := range tests {
+		got := escapeSQLiteLike(tt.input)
+		if got != tt.want {
+			t.Errorf("escapeSQLiteLike(%q) = %q, want %q",
+				tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestAggregateBySender_RecipientFilterNoOvercount verifies that recipient
+// EXISTS filters don't inflate counts when a message has multiple matching
+// recipients. Message 1 has to:bob AND to:carol; a search matching both
+// must still count message 1 once.
+func TestAggregateBySender_RecipientFilterNoOvercount(t *testing.T) {
+	env := newTestEnv(t)
+
+	opts := DefaultAggregateOptions()
+	// Message 1 (from alice) has to:bob AND to:carol. Searching for
+	// both terms exercises the multi-recipient path: with old JOIN-based
+	// filters, message 1 would match both joins and be double-counted.
+	opts.SearchQuery = "to:bob@company.org to:carol@example.com"
+	rows, err := env.Engine.Aggregate(env.Ctx, ViewSenders, opts)
+	if err != nil {
+		t.Fatalf("Aggregate: %v", err)
+	}
+
+	m := aggRowMap(t, rows)
+	// to: terms use OR — messages 1,2,3 match (all have to:bob, msg 1
+	// also has to:carol). With old JOIN filters, message 1 would produce
+	// two joined rows (matching bob and carol), inflating to count 4.
+	if got := m["alice@example.com"]; got != 3 {
+		t.Errorf("alice count = %d, want 3 (no overcount)", got)
+	}
 }
 
 // TestSQLiteEngine_SubAggregate_InvalidViewType verifies that invalid ViewType values

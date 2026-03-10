@@ -22,9 +22,11 @@ func (m Model) handleInlineSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "tab":
-		// Toggle search mode between Fast and Deep (only at message list level)
+		// Toggle search mode — only meaningful at message list level
+		// where Fast (Parquet metadata) and Deep (FTS5 body) differ.
+		// At aggregate level, both modes run the same query.
 		if m.level != levelMessageList {
-			return m, nil // Tab has no effect at aggregate levels
+			return m, nil
 		}
 		if m.searchMode == searchModeFast {
 			m.searchMode = searchModeDeep
@@ -33,16 +35,15 @@ func (m Model) handleInlineSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchMode = searchModeFast
 			m.searchInput.Placeholder = "search (Tab: deep)"
 		}
-		// Invalidate any pending debounce timers from old mode
 		m.inlineSearchDebounce++
-		// Re-trigger search immediately with new mode (no debounce for explicit mode toggle)
 		if query := m.searchInput.Value(); query != "" {
 			m.searchQuery = query
 			m.inlineSearchLoading = true
 			spinCmd := m.startSpinner()
 			m.searchFilter = m.drillFilter
 			m.searchFilter.SourceID = m.accountFilter
-			m.searchFilter.WithAttachmentsOnly = m.attachmentFilter
+			m.searchFilter.WithAttachmentsOnly = m.filters.attachmentsOnly
+			m.searchFilter.HideDeletedFromSource = m.filters.hideDeletedFromSource
 			m.searchRequestID++
 			return m, tea.Batch(spinCmd, m.loadSearch(query))
 		}
@@ -144,7 +145,7 @@ func (m Model) handleAggregateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Attachment filter
 	case "f":
-		m.openAttachmentFilter()
+		m.openFilterModal()
 		return m, nil
 
 	// Search - activate inline search bar
@@ -173,11 +174,19 @@ func (m Model) handleAggregateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		m.scrollOffset = 0
 		m.messages = nil // Clear stale messages from previous view
+		m.msgListOffset = 0
+		m.msgListLoadingMore = false
+		m.msgListComplete = false
 		m.loading = true
 		m.err = nil
 
 		// If there's an active search query, show search results instead of all messages
 		if m.searchQuery != "" {
+			m.searchFilter = m.drillFilter
+			m.searchFilter.SourceID = m.accountFilter
+			m.searchFilter.WithAttachmentsOnly = m.filters.attachmentsOnly
+			m.searchFilter.HideDeletedFromSource = m.filters.hideDeletedFromSource
+			m.loadRequestID++ // Invalidate stale loadMessages responses
 			m.searchRequestID++
 			return m, m.loadSearch(m.searchQuery)
 		}
@@ -290,9 +299,12 @@ func (m Model) handleMessageListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Handle list navigation.
-	// NOTE: Unlike handleAggregateKeys, we check for deep search
-	// loading between navigation and the early return. This is because pgdown/ctrl+d may
-	// need to trigger loading more search results after updating the cursor position.
+	// NOTE: Unlike handleAggregateKeys, we check for search pagination
+	// between navigation and the early return. This is because navigation keys
+	// (even when cursor is clamped at the boundary) may need to trigger loading
+	// more search results. navigateList only returns true for navigation keys
+	// (up/down/j/k/pgup/pgdown/home/end/G), so handled=true is safe to use
+	// as the gate for pagination checks.
 	handled := m.navigateList(msg.String(), len(m.messages))
 
 	// Check if we need to load more deep search results after pgdown
@@ -308,16 +320,30 @@ func (m Model) handleMessageListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if handled {
+		// Check if navigation requires loading more results (search or list).
+		// This fires even when cursor is clamped at the boundary (e.g., pressing
+		// down at the last loaded item) so pagination can still trigger.
+		if cmd := m.maybeLoadMoreSearchResults(); cmd != nil {
+			return m, cmd
+		}
+		if cmd := m.maybeLoadMoreMessages(); cmd != nil {
+			return m, cmd
+		}
 		return m, nil
 	}
 
 	switch msg.String() {
 	// Back - clear inner search first, then navigate back
 	case "esc":
-		// Always clear an active search before navigating back
-		if m.searchQuery != "" {
+		// Clear search only if it was initiated at this level (snapshot exists).
+		// Inherited search (from aggregate drill-down) has no snapshot —
+		// goBack restores the parent view with its search intact.
+		if m.searchQuery != "" && m.preSearchMessages != nil {
 			return m.clearMessageListSearch()
 		}
+		// Invalidate in-flight search responses so they don't write
+		// stale message data into the restored parent view.
+		m.searchRequestID++
 		return m.goBack()
 
 	// Selection
@@ -352,7 +378,7 @@ func (m Model) handleMessageListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Attachment filter
 	case "f":
-		m.openAttachmentFilter()
+		m.openFilterModal()
 		return m, nil
 
 	// Search - activate inline search bar
@@ -544,6 +570,56 @@ func (m *Model) maybeLoadMoreSearchResults() tea.Cmd {
 		m.searchLoadingMore = true
 		m.searchRequestID++
 		return m.loadSearchWithOffset(m.searchQuery, m.searchOffset, true)
+	}
+
+	return nil
+}
+
+// maybeLoadMoreMessages checks if we're near the end of the loaded message list and should load more.
+// This enables infinite-scroll pagination for non-search message lists.
+func (m *Model) maybeLoadMoreMessages() tea.Cmd {
+	// Don't paginate during search — search has its own pagination
+	if m.searchQuery != "" {
+		return nil
+	}
+
+	// Don't load more if already loading
+	if m.msgListLoadingMore || m.loading {
+		return nil
+	}
+
+	// Don't load more if we have no messages (empty results)
+	if len(m.messages) == 0 {
+		return nil
+	}
+
+	// Don't load more if we already know all data has been loaded
+	if m.msgListComplete {
+		return nil
+	}
+
+	// If total loaded messages isn't a multiple of the page size,
+	// the last page was short — we've reached the end of the data.
+	if len(m.messages)%messageListPageSize != 0 {
+		return nil
+	}
+
+	// Check if contextStats tells us we have all results
+	if m.contextStats != nil && m.contextStats.MessageCount > 0 &&
+		int64(len(m.messages)) >= m.contextStats.MessageCount {
+		return nil
+	}
+	if m.allMessages && m.stats != nil && m.stats.MessageCount > 0 &&
+		int64(len(m.messages)) >= m.stats.MessageCount {
+		return nil
+	}
+
+	// Load more when cursor is within 20 rows of the end
+	threshold := 20
+	if m.cursor >= len(m.messages)-threshold {
+		m.msgListLoadingMore = true
+		m.loadRequestID++
+		return m.loadMessagesWithOffset(m.msgListOffset, true)
 	}
 
 	return nil
@@ -745,20 +821,33 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ensureThreadCursorVisible()
 		}
 	case "pgup", "ctrl+u":
-		m.threadCursor -= m.pageSize
+		step := m.visibleRows()
+		m.threadCursor -= step
+		m.threadScrollOffset -= step
 		if m.threadCursor < 0 {
 			m.threadCursor = 0
 		}
-		m.ensureThreadCursorVisible()
+		if m.threadScrollOffset < 0 {
+			m.threadScrollOffset = 0
+		}
 	case "pgdown", "ctrl+d":
-		m.threadCursor += m.pageSize
-		if m.threadCursor >= len(m.threadMessages) {
-			m.threadCursor = len(m.threadMessages) - 1
+		step := m.visibleRows()
+		itemCount := len(m.threadMessages)
+		m.threadCursor += step
+		m.threadScrollOffset += step
+		if m.threadCursor >= itemCount {
+			m.threadCursor = itemCount - 1
 		}
 		if m.threadCursor < 0 {
 			m.threadCursor = 0
 		}
-		m.ensureThreadCursorVisible()
+		maxScroll := itemCount - m.visibleRows()
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.threadScrollOffset > maxScroll {
+			m.threadScrollOffset = maxScroll
+		}
 
 	// View message detail
 	case "enter":
@@ -796,12 +885,14 @@ func (m Model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleQuitConfirmKeys(msg)
 	case modalAccountSelector:
 		return m.handleAccountSelectorKeys(msg)
-	case modalAttachmentFilter:
-		return m.handleAttachmentFilterKeys(msg)
+	case modalFilterToggle:
+		return m.handleFilterToggleKeys(msg)
 	case modalExportAttachments:
 		return m.handleExportAttachmentsKeys(msg)
 	case modalExportResult:
 		return m.handleExportResultKeys()
+	case modalError:
+		return m.handleErrorKeys()
 	case modalHelp:
 		return m.handleHelpKeys(msg)
 	}
@@ -866,28 +957,45 @@ func (m Model) handleAccountSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleAttachmentFilterKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// filterOptionCount is the number of toggleable options in the filter modal.
+const filterOptionCount = 2
+
+func (m Model) handleFilterToggleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
 		if m.modalCursor > 0 {
 			m.modalCursor--
 		}
 	case "down", "j":
-		if m.modalCursor < 1 {
+		if m.modalCursor < filterOptionCount-1 {
 			m.modalCursor++
 		}
-	case "enter":
-		m.attachmentFilter = (m.modalCursor == 1)
+	case " ", "x":
+		// Toggle the checkbox at current cursor
+		switch m.modalCursor {
+		case 0:
+			m.filters.attachmentsOnly = !m.filters.attachmentsOnly
+		case 1:
+			m.filters.hideDeletedFromSource = !m.filters.hideDeletedFromSource
+		}
+	case "enter", "esc":
+		// Apply filters: close modal and reload data
 		m.modal = modalNone
 		m.loading = true
+
+		// Keep drillFilter in sync with global toggles so drill-down
+		// and sub-aggregate results reflect the latest filter state.
+		if m.level == levelMessageList || m.level == levelDrillDown {
+			m.drillFilter.WithAttachmentsOnly = m.filters.attachmentsOnly
+			m.drillFilter.HideDeletedFromSource = m.filters.hideDeletedFromSource
+		}
+
 		if m.level == levelMessageList {
 			m.loadRequestID++
 			return m, tea.Batch(m.loadMessages(), m.loadStats())
 		}
 		m.aggregateRequestID++
 		return m, tea.Batch(m.loadData(), m.loadStats())
-	case "esc":
-		m.modal = modalNone
 	}
 	return m, nil
 }
@@ -930,6 +1038,14 @@ func (m Model) handleExportResultKeys() (tea.Model, tea.Cmd) {
 	// Any key closes the result modal
 	m.modal = modalNone
 	m.modalResult = ""
+	return m, nil
+}
+
+func (m Model) handleErrorKeys() (tea.Model, tea.Cmd) {
+	// Any key dismisses the error modal
+	m.modal = modalNone
+	m.modalResult = ""
+	m.err = nil
 	return m, nil
 }
 
@@ -1055,9 +1171,10 @@ func (m Model) enterDrillDown(row query.AggregateRow) (tea.Model, tea.Cmd) {
 		// Top-level: create fresh drill filter
 		m.drillViewType = m.viewType
 		m.drillFilter = query.MessageFilter{
-			SourceID:            m.accountFilter,
-			WithAttachmentsOnly: m.attachmentFilter,
-			TimeRange:           query.TimeRange{Granularity: m.timeGranularity},
+			SourceID:              m.accountFilter,
+			WithAttachmentsOnly:   m.filters.attachmentsOnly,
+			HideDeletedFromSource: m.filters.hideDeletedFromSource,
+			TimeRange:             query.TimeRange{Granularity: m.timeGranularity},
 		}
 	}
 
@@ -1070,6 +1187,9 @@ func (m Model) enterDrillDown(row query.AggregateRow) (tea.Model, tea.Cmd) {
 	m.cursor = 0
 	m.scrollOffset = 0
 	m.messages = nil // Clear stale messages from previous drill-down
+	m.msgListOffset = 0
+	m.msgListLoadingMore = false
+	m.msgListComplete = false
 	m.loading = true
 	m.err = nil
 
@@ -1079,13 +1199,20 @@ func (m Model) enterDrillDown(row query.AggregateRow) (tea.Model, tea.Cmd) {
 		m.selection.messageIDs = make(map[int64]bool)
 	}
 
-	// Clear search on drill-down: the drill filter already
-	// constrains to the correct subset. The breadcrumb
-	// preserves the outer search for back-navigation.
-	// Increment searchRequestID to invalidate any in-flight
-	// search responses from the aggregate level.
-	m.searchQuery = ""
+	// Invalidate in-flight search responses from the aggregate level.
 	m.searchRequestID++
+
+	// Preserve search query through drill-down so the message list
+	// shows only messages matching both the drill filter and the search.
+	if m.searchQuery != "" {
+		m.searchFilter = m.drillFilter
+		m.searchFilter.SourceID = m.accountFilter
+		m.searchFilter.WithAttachmentsOnly = m.filters.attachmentsOnly
+		m.searchFilter.HideDeletedFromSource = m.filters.hideDeletedFromSource
+		m.loadRequestID++ // Invalidate stale loadMessages responses
+		m.searchRequestID++
+		return m, m.loadSearch(m.searchQuery)
+	}
 
 	m.loadRequestID++
 	return m, m.loadMessages()
@@ -1108,13 +1235,9 @@ func (m *Model) openAccountSelector() {
 	}
 }
 
-func (m *Model) openAttachmentFilter() {
-	m.modal = modalAttachmentFilter
-	if m.attachmentFilter {
-		m.modalCursor = 1 // "With Attachments"
-	} else {
-		m.modalCursor = 0 // "All Messages"
-	}
+func (m *Model) openFilterModal() {
+	m.modal = modalFilterToggle
+	m.modalCursor = 0
 }
 
 // exitInlineSearchMode resets inline search UI state without changing filter state.
@@ -1159,7 +1282,8 @@ func (m Model) commitInlineSearch() (tea.Model, tea.Cmd) {
 	if m.level == levelMessageList {
 		m.searchFilter = m.drillFilter
 		m.searchFilter.SourceID = m.accountFilter
-		m.searchFilter.WithAttachmentsOnly = m.attachmentFilter
+		m.searchFilter.WithAttachmentsOnly = m.filters.attachmentsOnly
+		m.searchFilter.HideDeletedFromSource = m.filters.hideDeletedFromSource
 		m.searchRequestID++
 		m.loading = true
 		spinCmd := m.startSpinner()
@@ -1215,8 +1339,12 @@ func (m *Model) restorePreSearchSnapshot() tea.Cmd {
 }
 
 func (m *Model) activateInlineSearch(placeholder string) tea.Cmd {
-	// Snapshot current message list so Esc can restore instantly
-	if m.level == levelMessageList && m.searchQuery == "" {
+	// Snapshot current message list so Esc can restore instantly.
+	// Only take a snapshot if we don't already have one (re-searches
+	// keep the original snapshot). This also handles inherited search
+	// from aggregate drill-down: the first local / captures the
+	// inherited results so Esc can restore them.
+	if m.level == levelMessageList && m.preSearchMessages == nil {
 		m.preSearchMessages = m.messages
 		m.preSearchCursor = m.cursor
 		m.preSearchScrollOffset = m.scrollOffset

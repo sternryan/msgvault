@@ -6,18 +6,22 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/store"
+	"golang.org/x/oauth2"
 )
 
 var (
 	cfgFile    string
+	homeDir    string
 	verbose    bool
 	quiet      bool
+	useLocal   bool // Force local database even when remote is configured
 	cfg        *config.Config
 	logger     *slog.Logger
 	passphrase string // Database encryption passphrase
@@ -48,11 +52,17 @@ in a single binary.`,
 			Level: level,
 		}))
 
-		// Load config
+		// Load config (--home is passed through so it influences
+		// where config.toml is loaded from, like MSGVAULT_HOME).
 		var err error
-		cfg, err = config.Load(cfgFile)
+		cfg, err = config.Load(cfgFile, homeDir)
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
+		}
+
+		// Ensure home directory exists on first use
+		if err := cfg.EnsureHomeDir(); err != nil {
+			return fmt.Errorf("create data directory %s: %w", cfg.HomeDir, err)
 		}
 
 		// Acquire passphrase if encryption is enabled
@@ -86,18 +96,65 @@ func ExecuteContext(ctx context.Context) error {
 	return rootCmd.ExecuteContext(ctx)
 }
 
-// oauthSetupHint is the common help text for OAuth configuration issues.
-const oauthSetupHint = `
+// oauthSetupHint returns help text for OAuth configuration issues,
+// using the actual config file path so it's clear on all platforms.
+func oauthSetupHint() string {
+	configPath := "<config file>"
+	if cfg != nil {
+		configPath = cfg.ConfigFilePath()
+	}
+	return fmt.Sprintf(`
 To use msgvault, you need a Google Cloud OAuth credential:
   1. Follow the setup guide: https://msgvault.io/guides/oauth-setup/
   2. Download the client_secret.json file
-  3. Add to your config.toml:
+  3. Create or edit %s:
        [oauth]
-       client_secrets = "/path/to/client_secret.json"`
+       client_secrets = "/path/to/client_secret.json"`, configPath)
+}
 
 // errOAuthNotConfigured returns a helpful error when OAuth client secrets are missing.
+// It also searches for client_secret*.json files in common locations.
 func errOAuthNotConfigured() error {
-	return fmt.Errorf("OAuth client secrets not configured." + oauthSetupHint)
+	// Check common locations for client_secret*.json
+	hint := tryFindClientSecrets()
+	if hint != "" {
+		return fmt.Errorf("OAuth client secrets not configured.%s", hint)
+	}
+	return fmt.Errorf("OAuth client secrets not configured.%s", oauthSetupHint())
+}
+
+// tryFindClientSecrets looks for client_secret*.json in common locations
+// and returns a hint if found.
+func tryFindClientSecrets() string {
+	home, _ := os.UserHomeDir()
+	candidates := []string{
+		filepath.Join(home, "Downloads", "client_secret*.json"),
+		"client_secret*.json",
+	}
+	if cfg != nil {
+		candidates = append(candidates, filepath.Join(cfg.HomeDir, "client_secret*.json"))
+	}
+
+	for _, pattern := range candidates {
+		matches, _ := filepath.Glob(pattern)
+		if len(matches) > 0 {
+			configPath := "<config file>"
+			if cfg != nil {
+				configPath = cfg.ConfigFilePath()
+			}
+			return fmt.Sprintf(`
+
+Found OAuth credentials at: %s
+
+To use this file, add to %s:
+  [oauth]
+  client_secrets = %q
+
+Or copy the file to your msgvault home directory:
+  cp %q ~/.msgvault/client_secret.json`, matches[0], configPath, matches[0], matches[0])
+		}
+	}
+	return ""
 }
 
 // openStore opens the msgvault database with the current passphrase (if any).
@@ -112,14 +169,94 @@ func openStore(dbPath string) (*store.Store, error) {
 // wrapOAuthError wraps an oauth/client-secrets error with setup instructions
 // if the root cause is a missing or unreadable secrets file.
 func wrapOAuthError(err error) error {
-	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("OAuth client secrets file not found." + oauthSetupHint)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("OAuth client secrets file not accessible.%s", oauthSetupHint())
 	}
 	return err
 }
 
+// isAuthInvalidError returns true if the error indicates the OAuth token is
+// permanently invalid (expired or revoked), as opposed to a transient failure
+// like a network error or context cancellation.
+func isAuthInvalidError(err error) bool {
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) {
+		// Google returns "invalid_grant" when refresh tokens are expired or revoked
+		return retrieveErr.ErrorCode == "invalid_grant"
+	}
+	return false
+}
+
+// tokenReauthorizer abstracts the oauth.Manager methods used by
+// getTokenSourceWithReauth, making the function testable without real OAuth.
+type tokenReauthorizer interface {
+	TokenSource(ctx context.Context, email string) (oauth2.TokenSource, error)
+	HasToken(email string) bool
+	DeleteToken(email string) error
+	Authorize(ctx context.Context, email string) error
+}
+
+// getTokenSourceWithReauth tries to get a token source for the given email.
+// If the token exists but is expired/revoked (invalid_grant), it automatically
+// deletes the old token and re-initiates the OAuth browser flow.
+// Transient errors (network, context cancellation) are returned as-is without
+// deleting the token.
+// The interactive parameter controls whether the function can open a browser
+// for re-authorization. Callers should pass the result of an isatty check.
+func getTokenSourceWithReauth(
+	ctx context.Context,
+	mgr tokenReauthorizer,
+	email string,
+	interactive bool,
+) (oauth2.TokenSource, error) {
+	tokenSource, err := mgr.TokenSource(ctx, email)
+	if err == nil {
+		return tokenSource, nil
+	}
+
+	// No token at all — user needs to run add-account
+	if !mgr.HasToken(email) {
+		return nil, fmt.Errorf("get token source: %w (run 'add-account %s' first)", err, email)
+	}
+
+	// Token exists but failed — only auto-reauth for auth-invalid errors
+	if !isAuthInvalidError(err) {
+		return nil, fmt.Errorf("get token source for %s: %w", email, err)
+	}
+
+	// Non-interactive session cannot open a browser for reauth
+	if !interactive {
+		return nil, fmt.Errorf(
+			"token for %s is expired or revoked, but cannot re-authorize "+
+				"in a non-interactive session (run this command from an "+
+				"interactive terminal to re-authorize automatically)",
+			email,
+		)
+	}
+
+	fmt.Printf("Token for %s is expired or revoked. Re-authorizing...\n", email)
+
+	if delErr := mgr.DeleteToken(email); delErr != nil {
+		return nil, fmt.Errorf("delete expired token: %w", delErr)
+	}
+
+	if authErr := mgr.Authorize(ctx, email); authErr != nil {
+		return nil, fmt.Errorf("re-authorize %s: %w", email, authErr)
+	}
+
+	// Retry with the new token
+	tokenSource, err = mgr.TokenSource(ctx, email)
+	if err != nil {
+		return nil, fmt.Errorf("get token source after re-authorization: %w", err)
+	}
+
+	return tokenSource, nil
+}
+
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.msgvault/config.toml)")
+	rootCmd.PersistentFlags().StringVar(&homeDir, "home", "", "home directory (overrides MSGVAULT_HOME)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress progress output")
+	rootCmd.PersistentFlags().BoolVar(&useLocal, "local", false, "force local database (override remote config)")
 }

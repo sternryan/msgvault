@@ -23,6 +23,7 @@ type Query struct {
 	LargerThan    *int64     // larger: filter (bytes)
 	SmallerThan   *int64     // smaller: filter (bytes)
 	AccountID     *int64     // in: account filter
+	HideDeleted   bool       // exclude messages where deleted_from_source_at IS NOT NULL
 }
 
 // IsEmpty returns true if the query has no search criteria.
@@ -62,10 +63,14 @@ var operators = map[string]operatorFn{
 		q.SubjectTerms = append(q.SubjectTerms, v)
 	},
 	"label": func(q *Query, v string, _ time.Time) {
-		q.Labels = append(q.Labels, v)
+		if v = strings.TrimSpace(v); v != "" {
+			q.Labels = append(q.Labels, v)
+		}
 	},
 	"l": func(q *Query, v string, _ time.Time) {
-		q.Labels = append(q.Labels, v)
+		if v = strings.TrimSpace(v); v != "" {
+			q.Labels = append(q.Labels, v)
+		}
 	},
 	"has": func(q *Query, v string, _ time.Time) {
 		if low := strings.ToLower(v); low == "attachment" || low == "attachments" {

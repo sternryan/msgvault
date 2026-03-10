@@ -10,7 +10,9 @@ import (
 )
 
 var (
-	headless bool
+	headless           bool
+	accountDisplayName string
+	forceReauth        bool
 )
 
 var addAccountCmd = &cobra.Command{
@@ -21,9 +23,15 @@ var addAccountCmd = &cobra.Command{
 By default, opens a browser for authorization. Use --headless to see instructions
 for authorizing on headless servers (Google does not support Gmail in device flow).
 
-Example:
+If a token already exists, the command skips authorization. Use --force to delete
+the existing token and start a fresh OAuth flow (most token issues are handled
+automatically during sync and verify).
+
+Examples:
   msgvault add-account you@gmail.com
-  msgvault add-account you@gmail.com --headless`,
+  msgvault add-account you@gmail.com --headless
+  msgvault add-account you@gmail.com --force
+  msgvault add-account you@gmail.com --display-name "Work Account"`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		email := args[0]
@@ -35,6 +43,11 @@ Example:
 		parts := strings.SplitN(email, "@", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" || !strings.Contains(parts[1], ".") {
 			return fmt.Errorf("invalid email address %q: must be in user@domain.tld format", email)
+		}
+
+		// Reject incompatible flag combination
+		if headless && forceReauth {
+			return fmt.Errorf("--headless and --force cannot be used together: --force requires browser-based OAuth which is not available in headless mode")
 		}
 
 		// For --headless, just show instructions (no OAuth config needed)
@@ -50,7 +63,7 @@ Example:
 
 		// Initialize database (in case it's new)
 		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath, store.WithPassphrase(passphrase))
+		s, err := store.Open(dbPath)
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
@@ -66,16 +79,33 @@ Example:
 			return wrapOAuthError(fmt.Errorf("create oauth manager: %w", err))
 		}
 
+		// If --force, delete existing token so we re-authorize
+		if forceReauth {
+			if oauthMgr.HasToken(email) {
+				fmt.Printf("Removing existing token for %s...\n", email)
+				if err := oauthMgr.DeleteToken(email); err != nil {
+					return fmt.Errorf("delete existing token: %w", err)
+				}
+			} else {
+				fmt.Printf("No existing token found for %s, proceeding with authorization.\n", email)
+			}
+		}
+
 		// Check if already authorized (e.g., token copied from another machine)
 		if oauthMgr.HasToken(email) {
 			// Still create the source record - needed for headless setup
 			// where token was copied but account not yet registered
-			_, err = s.GetOrCreateSource("gmail", email)
+			source, err := s.GetOrCreateSource("gmail", email)
 			if err != nil {
 				return fmt.Errorf("create source: %w", err)
 			}
-			fmt.Printf("Account %s is ready.\n", email)
-			fmt.Println("You can now run: msgvault sync-full", email)
+			if accountDisplayName != "" {
+				if err := s.UpdateSourceDisplayName(source.ID, accountDisplayName); err != nil {
+					return fmt.Errorf("set display name: %w", err)
+				}
+			}
+			fmt.Printf("Account %s is already authorized.\n", email)
+			fmt.Println("Next step: msgvault sync-full", email)
 			return nil
 		}
 
@@ -87,9 +117,16 @@ Example:
 		}
 
 		// Create source record in database
-		_, err = s.GetOrCreateSource("gmail", email)
+		source, err := s.GetOrCreateSource("gmail", email)
 		if err != nil {
 			return fmt.Errorf("create source: %w", err)
+		}
+
+		// Set display name if provided
+		if accountDisplayName != "" {
+			if err := s.UpdateSourceDisplayName(source.ID, accountDisplayName); err != nil {
+				return fmt.Errorf("set display name: %w", err)
+			}
 		}
 
 		fmt.Printf("\nAccount %s authorized successfully!\n", email)
@@ -101,5 +138,7 @@ Example:
 
 func init() {
 	addAccountCmd.Flags().BoolVar(&headless, "headless", false, "Show instructions for headless server setup")
+	addAccountCmd.Flags().BoolVar(&forceReauth, "force", false, "Delete existing token and re-authorize")
+	addAccountCmd.Flags().StringVar(&accountDisplayName, "display-name", "", "Display name for the account (e.g., \"Work\", \"Personal\")")
 	rootCmd.AddCommand(addAccountCmd)
 }

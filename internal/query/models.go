@@ -20,32 +20,34 @@ type AggregateRow struct {
 // MessageSummary represents a message in list views.
 // Contains enough information for display without fetching the full body.
 type MessageSummary struct {
-	ID              int64      `json:"id"`
-	SourceMessageID string     `json:"sourceMessageId"`
-	ConversationID  int64      `json:"conversationId"`
-	Subject         string     `json:"subject"`
-	Snippet         string     `json:"snippet"`
-	FromEmail       string     `json:"fromEmail"`
-	FromName        string     `json:"fromName"`
-	SentAt          time.Time  `json:"sentAt"`
-	SizeEstimate    int64      `json:"sizeEstimate"`
-	HasAttachments  bool       `json:"hasAttachments"`
-	AttachmentCount int        `json:"attachmentCount"`
-	Labels          []string   `json:"labels"`
-	DeletedAt       *time.Time `json:"deletedAt,omitempty"` // When message was deleted from server (nil if not deleted)
+	ID                   int64      `json:"id"`
+	SourceMessageID      string     `json:"sourceMessageId"`
+	ConversationID       int64      `json:"conversationId"`
+	SourceConversationID string     `json:"sourceConversationId"` // Gmail Thread ID
+	Subject              string     `json:"subject"`
+	Snippet              string     `json:"snippet"`
+	FromEmail            string     `json:"fromEmail"`
+	FromName             string     `json:"fromName"`
+	SentAt               time.Time  `json:"sentAt"`
+	SizeEstimate         int64      `json:"sizeEstimate"`
+	HasAttachments       bool       `json:"hasAttachments"`
+	AttachmentCount      int        `json:"attachmentCount"`
+	Labels               []string   `json:"labels"`
+	DeletedAt            *time.Time `json:"deletedAt,omitempty"` // When message was deleted from server (nil if not deleted)
 }
 
 // MessageDetail represents a full message with body and attachments.
 type MessageDetail struct {
-	ID              int64      `json:"id"`
-	SourceMessageID string     `json:"sourceMessageId"`
-	ConversationID  int64      `json:"conversationId"`
-	Subject         string     `json:"subject"`
-	Snippet         string     `json:"snippet"`
-	SentAt          time.Time  `json:"sentAt"`
-	ReceivedAt      *time.Time `json:"receivedAt,omitempty"`
-	SizeEstimate    int64      `json:"sizeEstimate"`
-	HasAttachments  bool       `json:"hasAttachments"`
+	ID                   int64      `json:"id"`
+	SourceMessageID      string     `json:"sourceMessageId"`
+	ConversationID       int64      `json:"conversationId"`
+	SourceConversationID string     `json:"sourceConversationId"` // Gmail Thread ID
+	Subject              string     `json:"subject"`
+	Snippet              string     `json:"snippet"`
+	SentAt               time.Time  `json:"sentAt"`
+	ReceivedAt           *time.Time `json:"receivedAt,omitempty"`
+	SizeEstimate         int64      `json:"sizeEstimate"`
+	HasAttachments       bool       `json:"hasAttachments"`
 
 	// Participants
 	From []Address `json:"from"`
@@ -212,7 +214,8 @@ type MessageFilter struct {
 	Before *time.Time
 
 	// Content filter
-	WithAttachmentsOnly bool // only return messages with attachments
+	WithAttachmentsOnly   bool // only return messages with attachments
+	HideDeletedFromSource bool // exclude messages where deleted_from_source_at IS NOT NULL
 
 	// Pagination
 	Pagination Pagination
@@ -297,7 +300,8 @@ type AggregateOptions struct {
 	TimeGranularity TimeGranularity
 
 	// Filter options
-	WithAttachmentsOnly bool
+	WithAttachmentsOnly   bool
+	HideDeletedFromSource bool
 
 	// Text search filter (filters aggregates to only include messages matching search)
 	SearchQuery string
@@ -323,8 +327,9 @@ type AccountInfo struct {
 
 // StatsOptions configures a stats query.
 type StatsOptions struct {
-	SourceID            *int64   // nil means all accounts
-	WithAttachmentsOnly bool     // only count messages with attachments
-	SearchQuery         string   // when set, stats reflect only messages matching this search
-	GroupBy             ViewType // when set, search filters on this view's key columns instead of subject+sender
+	SourceID              *int64   // nil means all accounts
+	WithAttachmentsOnly   bool     // only count messages with attachments
+	HideDeletedFromSource bool     // exclude messages where deleted_from_source_at IS NOT NULL
+	SearchQuery           string   // when set, stats reflect only messages matching this search
+	GroupBy               ViewType // when set, search filters on this view's key columns instead of subject+sender
 }
