@@ -77,37 +77,37 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | — | Pending |
-| FOUND-02 | — | Pending |
-| FOUND-03 | — | Pending |
-| FOUND-04 | — | Pending |
-| FOUND-05 | — | Pending |
-| PARITY-01 | — | Pending |
-| PARITY-02 | — | Pending |
-| PARITY-03 | — | Pending |
-| PARITY-04 | — | Pending |
-| PARITY-05 | — | Pending |
-| PARITY-06 | — | Pending |
-| PARITY-07 | — | Pending |
-| PARITY-08 | — | Pending |
-| RENDER-01 | — | Pending |
-| RENDER-02 | — | Pending |
-| RENDER-03 | — | Pending |
-| RENDER-04 | — | Pending |
-| THREAD-01 | — | Pending |
-| THREAD-02 | — | Pending |
-| THREAD-03 | — | Pending |
-| THREAD-04 | — | Pending |
-| THREAD-05 | — | Pending |
-| POLISH-01 | — | Pending |
-| POLISH-02 | — | Pending |
-| POLISH-03 | — | Pending |
+| FOUND-01 | Phase 6 | Pending |
+| FOUND-02 | Phase 6 | Pending |
+| FOUND-03 | Phase 6 | Pending |
+| FOUND-04 | Phase 6 | Pending |
+| FOUND-05 | Phase 6 | Pending |
+| PARITY-01 | Phase 6 | Pending |
+| PARITY-02 | Phase 6 | Pending |
+| PARITY-03 | Phase 6 | Pending |
+| PARITY-04 | Phase 6 | Pending |
+| PARITY-05 | Phase 6 | Pending |
+| PARITY-06 | Phase 6 | Pending |
+| PARITY-07 | Phase 6 | Pending |
+| PARITY-08 | Phase 6 | Pending |
+| RENDER-01 | Phase 7 | Pending |
+| RENDER-02 | Phase 7 | Pending |
+| RENDER-03 | Phase 7 | Pending |
+| RENDER-04 | Phase 7 | Pending |
+| THREAD-01 | Phase 8 | Pending |
+| THREAD-02 | Phase 8 | Pending |
+| THREAD-03 | Phase 8 | Pending |
+| THREAD-04 | Phase 8 | Pending |
+| THREAD-05 | Phase 8 | Pending |
+| POLISH-01 | Phase 9 | Pending |
+| POLISH-02 | Phase 9 | Pending |
+| POLISH-03 | Phase 9 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 25 total
-- Mapped to phases: 0
-- Unmapped: 25
+- Mapped to phases: 25
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-10*
-*Last updated: 2026-03-10 after initial definition*
+*Last updated: 2026-03-10 — traceability mapped to phases 6-9*
