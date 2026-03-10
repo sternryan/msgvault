@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/marcboeker/go-duckdb"
 	_ "github.com/mutecomm/go-sqlcipher/v4"
@@ -474,6 +475,44 @@ func TestDuckDBEngine_DeletedMessagesIncluded(t *testing.T) {
 	}
 }
 
+// TestDuckDBEngine_SearchHideDeleted verifies that Search (deep FTS path)
+// respects search.Query.HideDeleted via the sqliteEngine delegation.
+func TestDuckDBEngine_SearchHideDeleted(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Mark message 1 as deleted
+	_, err := env.DB.Exec("UPDATE messages SET deleted_from_source_at = datetime('now') WHERE id = 1")
+	if err != nil {
+		t.Fatalf("mark deleted: %v", err)
+	}
+
+	engine, err := NewDuckDBEngine("", "", env.DB)
+	if err != nil {
+		t.Fatalf("NewDuckDBEngine: %v", err)
+	}
+	t.Cleanup(func() { engine.Close() })
+
+	ctx := context.Background()
+
+	// Search without HideDeleted: all 5 messages
+	all, err := engine.Search(ctx, &search.Query{}, 100, 0)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(all) != 5 {
+		t.Errorf("Search without HideDeleted: expected 5, got %d", len(all))
+	}
+
+	// Search with HideDeleted: 4 messages
+	hidden, err := engine.Search(ctx, &search.Query{HideDeleted: true}, 100, 0)
+	if err != nil {
+		t.Fatalf("Search(HideDeleted): %v", err)
+	}
+	if len(hidden) != 4 {
+		t.Errorf("Search with HideDeleted: expected 4, got %d", len(hidden))
+	}
+}
+
 // TestDuckDBEngine_AggregateByRecipient verifies that recipient aggregation
 // includes both to and cc recipients using list_concat.
 func TestDuckDBEngine_AggregateByRecipient(t *testing.T) {
@@ -494,44 +533,44 @@ func TestDuckDBEngine_AggregateByRecipient(t *testing.T) {
 }
 
 // TestDuckDBEngine_AggregateByRecipient_SearchFiltersOnKey verifies that
-// searching in Recipients view filters on recipient email/name, not subject/sender.
-// This reproduces a bug where the search applied to subject/sender instead of
-// the recipient grouping key, causing inflated counts when summed across groups.
+// text term search in Recipients view matches subjects, senders, and the
+// recipient key column, then shows the recipient breakdown of all matching
+// messages.
 func TestDuckDBEngine_AggregateByRecipient_SearchFiltersOnKey(t *testing.T) {
 	engine := newParquetEngine(t)
 	ctx := context.Background()
 
-	// Search for "bob" — should return only bob@company.org as a recipient
-	// Test data: bob is a recipient (to) in msgs 1,2,3
+	// Search for "bob" — matches:
+	//   - bob@company.org as recipient key in msg1,2,3
+	//   - bob@company.org as sender of msg4,5
+	// Recipient breakdown of msgs 1-5: bob(3), alice(2), carol(1), dan(1)
 	opts := DefaultAggregateOptions()
 	opts.SearchQuery = "bob"
 	rows, err := engine.Aggregate(ctx, ViewRecipients, opts)
 	if err != nil {
 		t.Fatalf("AggregateByRecipient (search 'bob'): %v", err)
 	}
-
-	// Should only match bob@company.org as recipient, not bob as sender
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 recipient matching 'bob', got %d", len(rows))
+	gotKeys := make(map[string]bool)
+	for _, r := range rows {
+		gotKeys[r.Key] = true
 	}
-	if rows[0].Key != "bob@company.org" {
-		t.Errorf("expected bob@company.org, got %s", rows[0].Key)
-	}
-	if rows[0].Count != 3 {
-		t.Errorf("expected count=3 for bob, got %d", rows[0].Count)
+	if !gotKeys["bob@company.org"] {
+		t.Errorf("expected bob@company.org in results, got %v", rows)
 	}
 
-	// Search for "dan" — should return only dan@other.net (cc recipient in msg 2)
+	// Search for "dan" — matches dan@other.net as recipient key (msg2)
+	// and dan as sender display name. msg2 recipients: bob, dan
 	opts.SearchQuery = "dan"
 	rows, err = engine.Aggregate(ctx, ViewRecipients, opts)
 	if err != nil {
 		t.Fatalf("AggregateByRecipient (search 'dan'): %v", err)
 	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 recipient matching 'dan', got %d", len(rows))
+	gotKeys = make(map[string]bool)
+	for _, r := range rows {
+		gotKeys[r.Key] = true
 	}
-	if rows[0].Key != "dan@other.net" {
-		t.Errorf("expected dan@other.net, got %s", rows[0].Key)
+	if !gotKeys["dan@other.net"] {
+		t.Errorf("expected dan@other.net in results, got %v", rows)
 	}
 
 	// Verify totals don't exceed baseline
@@ -884,6 +923,8 @@ func TestDuckDBEngine_SearchFast(t *testing.T) {
 		// Operator filters
 		{"FromFilter", "from:bob", MessageFilter{}, []string{"Question", "Final"}},
 		{"LabelFilter", "label:Work", MessageFilter{}, []string{"Hello World", "Question"}},
+		{"LabelFilter_CaseInsensitive", "label:work", MessageFilter{}, []string{"Hello World", "Question"}},
+		{"LabelFilter_Substring", "label:wor", MessageFilter{}, []string{"Hello World", "Question"}},
 		{"HasAttachment", "has:attachment", MessageFilter{}, []string{"Re: Hello", "Question"}},
 		{"ToFilter_Bob", "to:bob", MessageFilter{}, []string{"Hello World", "Re: Hello", "Follow up"}},
 		{"ToFilter_Carol", "to:carol", MessageFilter{}, []string{"Hello World"}},
@@ -1312,6 +1353,11 @@ func TestDuckDBEngine_GetGmailIDsByFilter(t *testing.T) {
 			wantIDs: []string{"msg1", "msg4"},
 		},
 		{
+			name:    "label=work_case_insensitive",
+			filter:  MessageFilter{Label: "work"},
+			wantIDs: []string{"msg1", "msg4"},
+		},
+		{
 			name:    "time_period=2024-01",
 			filter:  MessageFilter{TimeRange: TimeRange{Period: "2024-01", Granularity: TimeMonth}},
 			wantIDs: []string{"msg1", "msg2"},
@@ -1665,9 +1711,9 @@ func TestDuckDBEngine_SubAggregate_MultipleEmptyTargets(t *testing.T) {
 	}
 }
 
-// TestDuckDBEngine_GetGmailIDsByFilter_NoParquet verifies error when analyticsDir is empty.
-func TestDuckDBEngine_GetGmailIDsByFilter_NoParquet(t *testing.T) {
-	// Create engine without Parquet
+// TestDuckDBEngine_GetGmailIDsByFilter_NoDataSource verifies error when no SQLite or Parquet available.
+func TestDuckDBEngine_GetGmailIDsByFilter_NoDataSource(t *testing.T) {
+	// Create engine without SQLite or Parquet
 	engine, err := NewDuckDBEngine("", "", nil)
 	if err != nil {
 		t.Fatalf("NewDuckDBEngine: %v", err)
@@ -1677,10 +1723,10 @@ func TestDuckDBEngine_GetGmailIDsByFilter_NoParquet(t *testing.T) {
 	ctx := context.Background()
 	_, err = engine.GetGmailIDsByFilter(ctx, MessageFilter{Sender: "test@example.com"})
 	if err == nil {
-		t.Fatal("expected error when calling GetGmailIDsByFilter without Parquet")
+		t.Fatal("expected error when calling GetGmailIDsByFilter without SQLite or Parquet")
 	}
-	if !strings.Contains(err.Error(), "requires Parquet") {
-		t.Errorf("expected 'requires Parquet' error, got: %v", err)
+	if !strings.Contains(err.Error(), "requires SQLite or Parquet") {
+		t.Errorf("expected 'requires SQLite or Parquet' error, got: %v", err)
 	}
 }
 
@@ -1818,7 +1864,7 @@ func TestBuildWhereClause_SearchOperators(t *testing.T) {
 		{
 			name:        "label operator",
 			searchQuery: "label:INBOX",
-			wantClauses: []string{"l_label.name = ?"}, // Exact match, consistent with SearchFast
+			wantClauses: []string{"l_label.name ILIKE ? ESCAPE"}, // Case-insensitive match
 		},
 		{
 			name:        "combined operators",
@@ -1891,6 +1937,11 @@ func TestAggregateBySender_WithSearchQuery(t *testing.T) {
 			searchQuery: "has:attachment",
 			wantSenders: []string{"alice@example.com", "bob@company.org"}, // msg2 (alice) and msg4 (bob)
 		},
+		{
+			name:        "label search filter (case-insensitive)",
+			searchQuery: "label:work",
+			wantSenders: []string{"alice@example.com", "bob@company.org"}, // msg1 (alice) and msg4 (bob)
+		},
 	}
 
 	for _, tt := range tests {
@@ -1915,6 +1966,43 @@ func TestAggregateBySender_WithSearchQuery(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAggregateByLabel_WithLabelSearch verifies that label: search in the
+// Labels aggregate view only shows matching labels, not all labels from
+// matching messages.
+func TestAggregateByLabel_WithLabelSearch(t *testing.T) {
+	engine := newParquetEngine(t)
+	ctx := context.Background()
+
+	// Test data: INBOX on msg1-5, Work on msg1+msg4, IMPORTANT on msg2.
+	// Searching label:work should only show "Work", not INBOX/IMPORTANT.
+	opts := AggregateOptions{
+		SearchQuery: "label:work",
+		Limit:       100,
+	}
+	rows, err := engine.Aggregate(ctx, ViewLabels, opts)
+	if err != nil {
+		t.Fatalf("Aggregate(ViewLabels, label:work): %v", err)
+	}
+
+	gotLabels := make(map[string]bool)
+	for _, row := range rows {
+		gotLabels[row.Key] = true
+	}
+
+	if !gotLabels["Work"] {
+		t.Errorf("expected 'Work' in results, got: %v", rows)
+	}
+	if gotLabels["INBOX"] {
+		t.Errorf("'INBOX' should not appear when searching label:work, got: %v", rows)
+	}
+	if gotLabels["IMPORTANT"] {
+		t.Errorf("'IMPORTANT' should not appear when searching label:work, got: %v", rows)
+	}
+	if len(rows) != 1 {
+		t.Errorf("expected 1 label row, got %d: %v", len(rows), rows)
 	}
 }
 
@@ -2087,7 +2175,11 @@ func TestDuckDBEngine_AggregateByRecipientName_EmptyStringFallback(t *testing.T)
 		`).
 		addEmptyTable("labels", "labels", "labels.parquet", labelsCols, `(1::BIGINT, 'x')`).
 		addEmptyTable("message_labels", "message_labels", "message_labels.parquet", messageLabelsCols, `(1::BIGINT, 1::BIGINT)`).
-		addEmptyTable("attachments", "attachments", "attachments.parquet", attachmentsCols, `(1::BIGINT, 100::BIGINT, 'x')`))
+		addEmptyTable("attachments", "attachments", "attachments.parquet", attachmentsCols, `(1::BIGINT, 100::BIGINT, 'x')`).
+		addTable("conversations", "conversations", "conversations.parquet", conversationsCols, `
+			(100::BIGINT, 'thread100'),
+			(101::BIGINT, 'thread101')
+		`))
 
 	ctx := context.Background()
 	results, err := engine.Aggregate(ctx, ViewRecipientNames, DefaultAggregateOptions())
@@ -2132,7 +2224,11 @@ func TestDuckDBEngine_ListMessages_MatchEmptyRecipientName(t *testing.T) {
 		`).
 		addEmptyTable("labels", "labels", "labels.parquet", labelsCols, `(1::BIGINT, 'x')`).
 		addEmptyTable("message_labels", "message_labels", "message_labels.parquet", messageLabelsCols, `(1::BIGINT, 1::BIGINT)`).
-		addEmptyTable("attachments", "attachments", "attachments.parquet", attachmentsCols, `(1::BIGINT, 100::BIGINT, 'x')`))
+		addEmptyTable("attachments", "attachments", "attachments.parquet", attachmentsCols, `(1::BIGINT, 100::BIGINT, 'x')`).
+		addTable("conversations", "conversations", "conversations.parquet", conversationsCols, `
+			(100::BIGINT, 'thread100'),
+			(101::BIGINT, 'thread101')
+		`))
 
 	ctx := context.Background()
 	filter := MessageFilter{EmptyValueTargets: map[ViewType]bool{ViewRecipientNames: true}}
@@ -2693,5 +2789,422 @@ func TestDuckDBEngine_SubAggregate_InvalidViewType(t *testing.T) {
 				t.Errorf("expected 'unsupported view type' error, got: %v", err)
 			}
 		})
+	}
+}
+
+// TestDuckDBEngine_VARCHARParquetColumns verifies that SearchFast, ListMessages,
+// and Aggregate queries work when Parquet integer columns are stored as VARCHAR.
+// This reproduces two DuckDB binder errors that occurred when Parquet schema
+// inference stored numeric columns as VARCHAR (e.g., from SQLite dynamic typing):
+//  1. "Cannot mix values of VARCHAR and INTEGER_LITERAL in COALESCE operator"
+//  2. "Cannot compare values of type BIGINT and VARCHAR in IN/ANY/ALL clause"
+//     (triggered by filtered_msgs CTE in ListMessages with sender/recipient filters)
+func TestDuckDBEngine_VARCHARParquetColumns(t *testing.T) {
+	// Create Parquet where conversation_id, size_estimate, and has_attachments
+	// are VARCHAR (no ::BIGINT/boolean cast), and attachment size is a VARCHAR
+	// string, to reproduce type mismatches in COALESCE, JOINs, and TRY_CAST paths.
+	engine := createEngineFromBuilder(t, newParquetBuilder(t).
+		addTable("messages", "messages/year=2024", "data.parquet", messagesCols, `
+			(1::BIGINT, 1::BIGINT, 'msg1', '100', 'Hello World', 'snippet1', TIMESTAMP '2024-01-15 10:00:00', '1000', '0', NULL::TIMESTAMP, 2024, 1),
+			(2::BIGINT, 1::BIGINT, 'msg2', '101', 'Goodbye', 'snippet2', TIMESTAMP '2024-01-16 10:00:00', '2000', '1', NULL::TIMESTAMP, 2024, 1)
+		`).
+		addTable("sources", "sources", "sources.parquet", sourcesCols, `
+			(1::BIGINT, 'test@gmail.com')
+		`).
+		addTable("participants", "participants", "participants.parquet", participantsCols, `
+			(1::BIGINT, 'alice@test.com', 'test.com', 'Alice')
+		`).
+		addTable("message_recipients", "message_recipients", "message_recipients.parquet", messageRecipientsCols, `
+			(1::BIGINT, 1::BIGINT, 'from', 'Alice'),
+			(2::BIGINT, 1::BIGINT, 'from', 'Alice')
+		`).
+		addEmptyTable("labels", "labels", "labels.parquet", labelsCols, `(1::BIGINT, 'x')`).
+		addEmptyTable("message_labels", "message_labels", "message_labels.parquet", messageLabelsCols, `(1::BIGINT, 1::BIGINT)`).
+		addEmptyTable("attachments", "attachments", "attachments.parquet", attachmentsCols, `(1::BIGINT, '100', 'x')`).
+		addTable("conversations", "conversations", "conversations.parquet", conversationsCols, `
+			(100::BIGINT, 'thread100'),
+			(101::BIGINT, 'thread101')
+		`))
+
+	ctx := context.Background()
+
+	t.Run("ListMessages", func(t *testing.T) {
+		results, err := engine.ListMessages(ctx, MessageFilter{})
+		if err != nil {
+			t.Fatalf("ListMessages with VARCHAR columns: %v", err)
+		}
+		if len(results) != 2 {
+			t.Fatalf("expected 2 messages, got %d", len(results))
+		}
+	})
+
+	// ListMessages with a sender filter exercises the filtered_msgs CTE path
+	// where mr.message_id IN (SELECT id FROM filtered_msgs) must compare
+	// compatible types (both BIGINT after CTE-level casting).
+	t.Run("ListMessages_SenderFilter", func(t *testing.T) {
+		results, err := engine.ListMessages(ctx, MessageFilter{
+			Sender: "alice@test.com",
+		})
+		if err != nil {
+			t.Fatalf("ListMessages with sender filter and VARCHAR columns: %v", err)
+		}
+		if len(results) != 2 {
+			t.Fatalf("expected 2 messages from alice, got %d", len(results))
+		}
+	})
+
+	t.Run("ListMessages_RecipientFilter", func(t *testing.T) {
+		results, err := engine.ListMessages(ctx, MessageFilter{
+			Recipient: "alice@test.com",
+		})
+		if err != nil {
+			t.Fatalf("ListMessages with recipient filter and VARCHAR columns: %v", err)
+		}
+		// alice is 'from', not 'to'/'cc'/'bcc', so expect 0
+		if len(results) != 0 {
+			t.Fatalf("expected 0 messages to alice as recipient, got %d", len(results))
+		}
+	})
+
+	t.Run("SearchFast", func(t *testing.T) {
+		q := search.Parse("Hello")
+		results, err := engine.SearchFast(ctx, q, MessageFilter{}, 100, 0)
+		if err != nil {
+			t.Fatalf("SearchFast with VARCHAR columns: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(results))
+		}
+		if results[0].Subject != "Hello World" {
+			t.Fatalf("unexpected subject: %s", results[0].Subject)
+		}
+	})
+
+	t.Run("SearchFastCount", func(t *testing.T) {
+		q := search.Parse("Hello")
+		count, err := engine.SearchFastCount(ctx, q, MessageFilter{})
+		if err != nil {
+			t.Fatalf("SearchFastCount with VARCHAR columns: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("expected count 1, got %d", count)
+		}
+	})
+
+	t.Run("Aggregate", func(t *testing.T) {
+		results, err := engine.Aggregate(ctx, ViewSenders, DefaultAggregateOptions())
+		if err != nil {
+			t.Fatalf("Aggregate with VARCHAR columns: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 sender, got %d", len(results))
+		}
+	})
+
+	t.Run("GetTotalStats", func(t *testing.T) {
+		stats, err := engine.GetTotalStats(ctx, StatsOptions{})
+		if err != nil {
+			t.Fatalf("GetTotalStats with VARCHAR columns: %v", err)
+		}
+		if stats.MessageCount != 2 {
+			t.Fatalf("expected 2 messages, got %d", stats.MessageCount)
+		}
+	})
+}
+
+// TestSearchCacheKeyFor verifies that the JSON-based cache key avoids
+// ambiguous collisions that a simple delimiter-based approach would have.
+func TestSearchCacheKeyFor(t *testing.T) {
+	tests := []struct {
+		name      string
+		conds1    []string
+		args1     []interface{}
+		conds2    []string
+		args2     []interface{}
+		wantEqual bool
+	}{
+		{
+			name:      "identical inputs produce same key",
+			conds1:    []string{"a = ?", "b = ?"},
+			args1:     []interface{}{"foo", 42},
+			conds2:    []string{"a = ?", "b = ?"},
+			args2:     []interface{}{"foo", 42},
+			wantEqual: true,
+		},
+		{
+			name:      "different conditions produce different keys",
+			conds1:    []string{"a = ?"},
+			args1:     []interface{}{"foo"},
+			conds2:    []string{"b = ?"},
+			args2:     []interface{}{"foo"},
+			wantEqual: false,
+		},
+		{
+			name:      "args with commas are not ambiguous",
+			conds1:    []string{"x = ?"},
+			args1:     []interface{}{"foo,bar"},
+			conds2:    []string{"x = ?"},
+			args2:     []interface{}{"foo", "bar"},
+			wantEqual: false,
+		},
+		{
+			name:      "args with pipes are not ambiguous",
+			conds1:    []string{"a|b"},
+			args1:     []interface{}{"x"},
+			conds2:    []string{"a", "b"},
+			args2:     []interface{}{"x"},
+			wantEqual: false,
+		},
+		{
+			name:      "different arg types produce different keys",
+			conds1:    []string{"x = ?"},
+			args1:     []interface{}{"42"},
+			conds2:    []string{"x = ?"},
+			args2:     []interface{}{42},
+			wantEqual: false,
+		},
+		{
+			name:      "empty inputs produce same key",
+			conds1:    []string{},
+			args1:     []interface{}{},
+			conds2:    []string{},
+			args2:     []interface{}{},
+			wantEqual: true,
+		},
+		{
+			name:      "condition containing JSON special chars",
+			conds1:    []string{`msg.subject ILIKE ? ESCAPE '\'`},
+			args1:     []interface{}{`%"quoted"%`},
+			conds2:    []string{`msg.subject ILIKE ? ESCAPE '\'`},
+			args2:     []interface{}{`%"quoted"%`},
+			wantEqual: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key1 := searchCacheKeyFor(tt.conds1, tt.args1)
+			key2 := searchCacheKeyFor(tt.conds2, tt.args2)
+			if tt.wantEqual && key1 != key2 {
+				t.Errorf("expected equal keys:\n  key1=%s\n  key2=%s", key1, key2)
+			}
+			if !tt.wantEqual && key1 == key2 {
+				t.Errorf("expected different keys but got same:\n  key=%s", key1)
+			}
+		})
+	}
+}
+
+// TestSearchFastWithStats_CacheHitSkipsRescan verifies that paginating the
+// same search reuses the cached temp table (cache hit) and returns consistent
+// count and stats across pages.
+func TestSearchFastWithStats_CacheHitSkipsRescan(t *testing.T) {
+	engine := newParquetEngine(t)
+	ctx := context.Background()
+
+	q := search.Parse("Hello")
+	filter := MessageFilter{}
+
+	// First call — cache miss, materializes temp table.
+	result1, err := engine.SearchFastWithStats(ctx, q, "Hello", filter, ViewSenders, 2, 0)
+	if err != nil {
+		t.Fatalf("first SearchFastWithStats: %v", err)
+	}
+	if result1.TotalCount <= 0 {
+		t.Fatalf("expected positive total count, got %d", result1.TotalCount)
+	}
+	if result1.Stats == nil {
+		t.Fatal("expected stats on first call")
+	}
+
+	// Remember temp table seq before second call.
+	seqBefore := engine.tempTableSeq.Load()
+
+	// Second call — same conditions, different offset → cache hit.
+	result2, err := engine.SearchFastWithStats(ctx, q, "Hello", filter, ViewSenders, 2, 2)
+	if err != nil {
+		t.Fatalf("second SearchFastWithStats: %v", err)
+	}
+
+	// Cache hit should NOT increment temp table seq (no new materialization).
+	seqAfter := engine.tempTableSeq.Load()
+	if seqAfter != seqBefore {
+		t.Errorf("cache hit should not create new temp table: seq went from %d to %d", seqBefore, seqAfter)
+	}
+
+	// Count and stats must be identical across pages.
+	if result2.TotalCount != result1.TotalCount {
+		t.Errorf("total count mismatch: page1=%d, page2=%d", result1.TotalCount, result2.TotalCount)
+	}
+	if result2.Stats == nil {
+		t.Fatal("expected stats on cache hit")
+	}
+	if result2.Stats.MessageCount != result1.Stats.MessageCount {
+		t.Errorf("stats message count mismatch: page1=%d, page2=%d",
+			result1.Stats.MessageCount, result2.Stats.MessageCount)
+	}
+	if result2.Stats.TotalSize != result1.Stats.TotalSize {
+		t.Errorf("stats total size mismatch: page1=%d, page2=%d",
+			result1.Stats.TotalSize, result2.Stats.TotalSize)
+	}
+}
+
+// TestSearchFastWithStats_CacheInvalidatedOnNewSearch verifies that changing
+// the search query invalidates the cache and creates a new temp table.
+func TestSearchFastWithStats_CacheInvalidatedOnNewSearch(t *testing.T) {
+	engine := newParquetEngine(t)
+	ctx := context.Background()
+
+	filter := MessageFilter{}
+
+	// First search.
+	q1 := search.Parse("Hello")
+	result1, err := engine.SearchFastWithStats(ctx, q1, "Hello", filter, ViewSenders, 100, 0)
+	if err != nil {
+		t.Fatalf("first search: %v", err)
+	}
+
+	seqBefore := engine.tempTableSeq.Load()
+
+	// Different search — must invalidate cache.
+	q2 := search.Parse("Meeting")
+	result2, err := engine.SearchFastWithStats(ctx, q2, "Meeting", filter, ViewSenders, 100, 0)
+	if err != nil {
+		t.Fatalf("second search: %v", err)
+	}
+
+	seqAfter := engine.tempTableSeq.Load()
+	if seqAfter == seqBefore {
+		t.Error("new search should create a new temp table (cache invalidation)")
+	}
+
+	// Results should differ (different search terms).
+	if result1.TotalCount == result2.TotalCount && result1.TotalCount > 0 {
+		t.Log("warning: both searches returned same count — test data may not differentiate them")
+	}
+}
+
+// TestDuckDBEngine_HideDeletedFromSource verifies that HideDeletedFromSource
+// filters out deleted messages in aggregates, SubAggregate, search, and stats.
+func TestDuckDBEngine_HideDeletedFromSource(t *testing.T) {
+	now := time.Now()
+	b := NewTestDataBuilder(t)
+	b.AddSource("test@gmail.com")
+	b.AddParticipant("alice@example.com", "example.com", "Alice")
+	b.AddParticipant("bob@company.org", "company.org", "Bob")
+
+	// msg1: deleted, msg2+msg3: not deleted
+	msg1 := b.AddMessage(MessageOpt{Subject: "Deleted msg", SentAt: makeDate(2024, 1, 15), SizeEstimate: 1000, DeletedAt: &now})
+	msg2 := b.AddMessage(MessageOpt{Subject: "Active msg", SentAt: makeDate(2024, 1, 16), SizeEstimate: 2000})
+	msg3 := b.AddMessage(MessageOpt{Subject: "Another active", SentAt: makeDate(2024, 2, 1), SizeEstimate: 1500})
+
+	b.AddFrom(msg1, 1, "Alice")
+	b.AddTo(msg1, 2, "Bob")
+	b.AddFrom(msg2, 1, "Alice")
+	b.AddTo(msg2, 2, "Bob")
+	b.AddFrom(msg3, 2, "Bob")
+	b.AddTo(msg3, 1, "Alice")
+
+	inbox := b.AddLabel("INBOX")
+	b.AddMessageLabel(msg1, inbox)
+	b.AddMessageLabel(msg2, inbox)
+	b.AddMessageLabel(msg3, inbox)
+
+	engine := b.BuildEngine()
+	ctx := context.Background()
+
+	// Aggregate without filter: all 3 messages counted
+	opts := DefaultAggregateOptions()
+	rows, err := engine.Aggregate(ctx, ViewSenders, opts)
+	if err != nil {
+		t.Fatalf("Aggregate: %v", err)
+	}
+	total := int64(0)
+	for _, r := range rows {
+		total += r.Count
+	}
+	if total != 3 {
+		t.Errorf("aggregate without filter: expected 3 total, got %d", total)
+	}
+
+	// Aggregate with HideDeletedFromSource: only 2 messages
+	opts.HideDeletedFromSource = true
+	rows, err = engine.Aggregate(ctx, ViewSenders, opts)
+	if err != nil {
+		t.Fatalf("Aggregate(hide-deleted): %v", err)
+	}
+	total = 0
+	for _, r := range rows {
+		total += r.Count
+	}
+	if total != 2 {
+		t.Errorf("aggregate with hide-deleted: expected 2 total, got %d", total)
+	}
+
+	// SubAggregate without filter: all 3
+	filter := MessageFilter{Sender: "alice@example.com"}
+	subRows, err := engine.SubAggregate(ctx, filter, ViewLabels, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("SubAggregate: %v", err)
+	}
+	if len(subRows) == 0 {
+		t.Fatal("SubAggregate returned no rows")
+	}
+	if subRows[0].Count != 2 {
+		t.Errorf("SubAggregate without filter: expected 2 for alice, got %d", subRows[0].Count)
+	}
+
+	// SubAggregate with HideDeletedFromSource: only 1 (msg1 excluded)
+	filter.HideDeletedFromSource = true
+	subRows, err = engine.SubAggregate(ctx, filter, ViewLabels, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("SubAggregate(hide-deleted): %v", err)
+	}
+	if len(subRows) == 0 {
+		t.Fatal("SubAggregate(hide-deleted) returned no rows")
+	}
+	if subRows[0].Count != 1 {
+		t.Errorf("SubAggregate with hide-deleted: expected 1 for alice, got %d", subRows[0].Count)
+	}
+
+	// SearchFast without filter: all 3 (search term "active" matches all subjects
+	// via case-insensitive match: "Deleted msg" doesn't match, so use broader term)
+	q := search.Parse("") // empty query matches all
+	results, err := engine.SearchFast(ctx, q, MessageFilter{}, 100, 0)
+	if err != nil {
+		t.Fatalf("SearchFast: %v", err)
+	}
+	if len(results) != 3 {
+		t.Errorf("SearchFast without filter: expected 3, got %d", len(results))
+	}
+
+	// SearchFast with HideDeletedFromSource: only 2
+	results, err = engine.SearchFast(ctx, q, MessageFilter{HideDeletedFromSource: true}, 100, 0)
+	if err != nil {
+		t.Fatalf("SearchFast(hide-deleted): %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("SearchFast with hide-deleted: expected 2, got %d", len(results))
+	}
+
+	// SearchFastCount consistency
+	count, err := engine.SearchFastCount(ctx, q, MessageFilter{HideDeletedFromSource: true})
+	if err != nil {
+		t.Fatalf("SearchFastCount(hide-deleted): %v", err)
+	}
+	if count != 2 {
+		t.Errorf("SearchFastCount with hide-deleted: expected 2, got %d", count)
+	}
+
+	// GetTotalStats with HideDeletedFromSource
+	stats, err := engine.GetTotalStats(ctx, StatsOptions{HideDeletedFromSource: true})
+	if err != nil {
+		t.Fatalf("GetTotalStats(hide-deleted): %v", err)
+	}
+	if stats == nil {
+		t.Fatal("GetTotalStats returned nil")
+	}
+	if stats.MessageCount != 2 {
+		t.Errorf("GetTotalStats with hide-deleted: expected 2 messages, got %d", stats.MessageCount)
 	}
 }

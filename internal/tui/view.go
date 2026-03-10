@@ -163,9 +163,12 @@ func (m Model) buildTitleBar() string {
 		}
 	}
 
-	// Attachment filter indicator
-	if m.attachmentFilter {
+	// Filter indicators
+	if m.filters.attachmentsOnly {
 		accountStr += " [Attachments]"
+	}
+	if m.filters.hideDeletedFromSource {
+		accountStr += " [Hide Deleted]"
 	}
 
 	// Update notification (right-aligned on title bar)
@@ -285,11 +288,7 @@ func (m Model) headerView() string {
 
 // aggregateTableView renders the aggregate data table.
 func (m Model) aggregateTableView() string {
-	if m.err != nil {
-		return m.fillScreen(errorStyle.Render(padRight(fmt.Sprintf("Error: %v", m.err), m.width)), 1)
-	}
-
-	if len(m.rows) == 0 && !m.loading {
+	if len(m.rows) == 0 && !m.loading && !m.inlineSearchActive && m.searchQuery == "" && m.err == nil {
 		return m.fillScreen(normalRowStyle.Render(padRight("No data", m.width)), 1)
 	}
 
@@ -401,8 +400,19 @@ func (m Model) aggregateTableView() string {
 		sb.WriteString("\n")
 	}
 
-	// Fill remaining space (minus 1 for notification line)
-	for i := endRow - m.scrollOffset; i < m.pageSize-1; i++ {
+	// Show "No results" indicator when search returned zero matches
+	if len(m.rows) == 0 && !m.loading {
+		sb.WriteString(normalRowStyle.Render(padRight("   No results found", m.width)))
+		sb.WriteString("\n")
+	}
+
+	// Fill remaining space (minus 1 for notification line).
+	// Account for the "No results found" line when rows is empty.
+	dataRows := endRow - m.scrollOffset
+	if len(m.rows) == 0 && !m.loading {
+		dataRows = 1 // the "No results found" row
+	}
+	for i := dataRows; i < m.pageSize-1; i++ {
 		sb.WriteString(normalRowStyle.Render(strings.Repeat(" ", m.width)))
 		sb.WriteString("\n")
 	}
@@ -411,7 +421,6 @@ func (m Model) aggregateTableView() string {
 	var infoContent string
 	isLoading := m.loading || m.inlineSearchLoading || m.searchLoadingMore
 	if m.inlineSearchActive {
-		// At aggregate level, only Fast search is available (no mode tag needed)
 		infoContent = "/" + m.searchInput.View()
 	} else if m.searchQuery != "" {
 		infoContent = fmt.Sprintf(" Search: %q", m.searchQuery)
@@ -428,11 +437,10 @@ func (m Model) aggregateTableView() string {
 
 // messageListView renders the message list.
 func (m Model) messageListView() string {
-	if m.err != nil {
-		return m.fillScreen(errorStyle.Render(padRight(fmt.Sprintf("Error: %v", m.err), m.width)), 1)
-	}
-
-	if len(m.messages) == 0 && !m.loading {
+	// Non-search empty state: show simple "No messages" without header/info line.
+	// When a search is active (or search bar is open), fall through to full
+	// rendering so the search bar stays visible and the user can edit their query.
+	if len(m.messages) == 0 && !m.loading && !m.inlineSearchActive && m.searchQuery == "" && m.err == nil {
 		return m.fillScreen(normalRowStyle.Render(padRight("No messages", m.width)), 1)
 	}
 
@@ -488,6 +496,12 @@ func (m Model) messageListView() string {
 	endRow := m.scrollOffset + m.pageSize - 1
 	if endRow > len(m.messages) {
 		endRow = len(m.messages)
+	}
+
+	// Show "No results" indicator when search returned zero matches
+	if len(m.messages) == 0 && !m.loading {
+		sb.WriteString(normalRowStyle.Render(padRight("   No results found", m.width)))
+		sb.WriteString("\n")
 	}
 
 	for i := m.scrollOffset; i < endRow; i++ {
@@ -559,8 +573,13 @@ func (m Model) messageListView() string {
 		sb.WriteString("\n")
 	}
 
-	// Fill remaining space (minus 1 for info line)
-	for i := endRow - m.scrollOffset; i < m.pageSize-1; i++ {
+	// Fill remaining space (minus 1 for info line).
+	// Account for the "No results found" line when messages is empty.
+	dataRows := endRow - m.scrollOffset
+	if len(m.messages) == 0 && !m.loading {
+		dataRows = 1 // the "No results found" row
+	}
+	for i := dataRows; i < m.pageSize-1; i++ {
 		sb.WriteString(normalRowStyle.Render(strings.Repeat(" ", m.width)))
 		sb.WriteString("\n")
 	}
@@ -578,6 +597,8 @@ func (m Model) messageListView() string {
 		infoContent = fmt.Sprintf(" Search: %q", m.searchQuery)
 		if m.searchTotalCount > 0 {
 			infoContent += fmt.Sprintf(" (%d results)", m.searchTotalCount)
+		} else if m.searchTotalCount == 0 {
+			infoContent += " (0 results)"
 		} else if m.searchTotalCount == -1 {
 			infoContent += fmt.Sprintf(" (%d+ results, PgDn for more)", len(m.messages))
 		}
@@ -705,13 +726,13 @@ func (m Model) fillScreenDetail(content string, usedLines int) string {
 
 // messageDetailView renders the full message.
 func (m Model) messageDetailView() string {
-	if m.err != nil {
-		return m.fillScreenDetail(errorStyle.Render(padRight(fmt.Sprintf("Error loading message: %v", m.err), m.width)), 1)
-	}
-
 	if m.messageDetail == nil {
 		if m.loading {
 			return m.fillScreenDetail(loadingStyle.Render(padRight(m.spinnerIndicator()+" Loading message...", m.width)), 1)
+		}
+		content := m.fillScreenDetail(normalRowStyle.Render(strings.Repeat(" ", m.width)), 1)
+		if m.modal != modalNone {
+			return m.overlayModal(content)
 		}
 		return m.fillScreenDetail(errorStyle.Render(padRight("Message not found (nil detail)", m.width)), 1)
 	}
@@ -791,16 +812,16 @@ func (m Model) messageDetailView() string {
 
 // threadView renders the thread/conversation view.
 func (m Model) threadView() string {
-	if m.err != nil {
-		return m.fillScreen(errorStyle.Render(padRight(fmt.Sprintf("Error: %v", m.err), m.width)), 1)
-	}
-
 	if m.loading && len(m.threadMessages) == 0 {
 		return m.fillScreen(loadingStyle.Render(padRight(m.spinnerIndicator()+" Loading thread...", m.width)), 1)
 	}
 
 	if !m.loading && len(m.threadMessages) == 0 {
-		return m.fillScreen(normalRowStyle.Render(padRight("No messages in thread", m.width)), 1)
+		content := m.fillScreen(normalRowStyle.Render(padRight("No messages in thread", m.width)), 1)
+		if m.modal != modalNone {
+			return m.overlayModal(content)
+		}
+		return content
 	}
 
 	var sb strings.Builder
@@ -1149,7 +1170,7 @@ var rawHelpLines = []string{
 	"Other",
 	"  /           Search",
 	"  A           Select account",
-	"  f           Filter by attachments",
+	"  f           Filter (attachments, deleted)",
 	"  e           Export attachments (in message view)",
 	"  q           Quit",
 	"",
@@ -1223,24 +1244,34 @@ func (m Model) renderAccountSelectorModal() string {
 	return sb.String()
 }
 
-// renderAttachmentFilterModal renders the attachment filter modal content.
-func (m Model) renderAttachmentFilterModal() string {
+// renderFilterModal renders the filter toggle modal content with checkboxes.
+func (m Model) renderFilterModal() string {
 	var sb strings.Builder
 	sb.WriteString(modalTitleStyle.Render("Filter Messages"))
 	sb.WriteString("\n\n")
-	// All Messages option
-	indicator := "○"
-	if m.modalCursor == 0 {
-		indicator = "●"
+
+	type filterOption struct {
+		label   string
+		checked bool
 	}
-	sb.WriteString(fmt.Sprintf(" %s All Messages\n", indicator))
-	// With Attachments option
-	indicator = "○"
-	if m.modalCursor == 1 {
-		indicator = "●"
+	options := []filterOption{
+		{"Only with attachments", m.filters.attachmentsOnly},
+		{"Hide deleted from source", m.filters.hideDeletedFromSource},
 	}
-	sb.WriteString(fmt.Sprintf(" %s With Attachments\n", indicator))
-	sb.WriteString("\n[↑/↓] Navigate  [Enter] Select  [Esc] Cancel")
+
+	for i, opt := range options {
+		cursor := "  "
+		if m.modalCursor == i {
+			cursor = "▶ "
+		}
+		checkbox := "[ ]"
+		if opt.checked {
+			checkbox = "[x]"
+		}
+		sb.WriteString(fmt.Sprintf("%s%s %s\n", cursor, checkbox, opt.label))
+	}
+
+	sb.WriteString("\n[↑/↓] Navigate  [Space/x] Toggle  [Enter/Esc] Apply")
 	return sb.String()
 }
 
@@ -1305,6 +1336,13 @@ func (m Model) renderExportAttachmentsModal() string {
 	return sb.String()
 }
 
+// renderErrorModal renders the error modal content.
+func (m Model) renderErrorModal() string {
+	return modalTitleStyle.Render("Error") + "\n\n" +
+		m.modalResult + "\n\n" +
+		"Press any key to dismiss"
+}
+
 // renderExportResultModal renders the export result modal content.
 func (m Model) renderExportResultModal() string {
 	return modalTitleStyle.Render("Export Complete") + "\n\n" +
@@ -1324,14 +1362,16 @@ func (m Model) overlayModal(background string) string {
 		modalContent = m.renderQuitConfirmModal()
 	case modalAccountSelector:
 		modalContent = m.renderAccountSelectorModal()
-	case modalAttachmentFilter:
-		modalContent = m.renderAttachmentFilterModal()
+	case modalFilterToggle:
+		modalContent = m.renderFilterModal()
 	case modalHelp:
 		modalContent = m.renderHelpModal()
 	case modalExportAttachments:
 		modalContent = m.renderExportAttachmentsModal()
 	case modalExportResult:
 		modalContent = m.renderExportResultModal()
+	case modalError:
+		modalContent = m.renderErrorModal()
 	}
 
 	if modalContent == "" {

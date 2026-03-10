@@ -1,40 +1,61 @@
 package query
 
 import (
-	"bytes"
-	"compress/zlib"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb"
-	"github.com/wesm/msgvault/internal/mime"
 	"github.com/wesm/msgvault/internal/search"
 )
 
 // DuckDBEngine implements Engine using DuckDB for fast Parquet queries.
 // It uses a hybrid approach:
 //   - DuckDB with Parquet for fast aggregate queries
-//   - DuckDB's sqlite_scan for list queries (ListMessages, ListAccounts)
+//   - DuckDB's sqlite_scan for list queries (ListMessages, ListAccounts) — non-Windows only
 //   - Direct SQLite for FTS search and message body retrieval (sqlite_scan can't use FTS5)
+//
+// On Windows, the sqlite_scanner extension is not available (DuckDB's extension
+// repository does not publish MinGW builds). All SQLite queries route through
+// sqliteEngine instead.
 //
 // Deletion handling: The Python ETL excludes deleted messages (deleted_from_source_at IS NOT NULL)
 // when building Parquet files. However, messages deleted AFTER the Parquet build will still
 // appear in aggregates until the next `build-parquet --full-rebuild`. For the full deletion
 // index solution, see beads issue msgvault-ozj.
 type DuckDBEngine struct {
-	db           *sql.DB
-	analyticsDir string
-	sqlitePath   string        // Path to SQLite database for sqlite_scan queries
-	sqliteDB     *sql.DB       // Direct SQLite connection for FTS and body retrieval
-	sqliteEngine *SQLiteEngine // Reusable engine for FTS cache, created once if sqliteDB is set
+	db               *sql.DB
+	analyticsDir     string
+	sqlitePath       string        // Path to SQLite database for sqlite_scan queries
+	sqliteDB         *sql.DB       // Direct SQLite connection for FTS and body retrieval
+	sqliteEngine     *SQLiteEngine // Reusable engine for FTS cache, created once if sqliteDB is set
+	hasSQLiteScanner bool          // true if DuckDB's sqlite extension is loaded
+	tempTableSeq     atomic.Uint64 // Unique suffix for temp tables to avoid concurrent collisions
+
+	// Search result cache: keeps the materialized temp table alive across
+	// pagination calls for the same search query, avoiding repeated Parquet scans.
+	searchCacheMu    sync.Mutex  // protects cache fields from concurrent goroutines
+	searchCacheKey   string      // deterministic key from conditions+args
+	searchCacheTable string      // temp table name (e.g. "_search_matches_42")
+	searchCacheCount int64       // cached COUNT(*) from materialization
+	searchCacheStats *TotalStats // cached stats from Phase 4
+}
+
+// DuckDBOptions configures optional DuckDB engine behavior.
+type DuckDBOptions struct {
+	// DisableSQLiteScanner prevents loading the sqlite_scanner extension even
+	// on platforms where it would normally be available. This forces all SQLite
+	// queries to route through sqliteEngine, matching the Windows code path.
+	// Useful for testing the non-scanner code path on Linux/macOS.
+	DisableSQLiteScanner bool
 }
 
 // NewDuckDBEngine creates a new DuckDB-backed query engine.
@@ -49,7 +70,11 @@ type DuckDBEngine struct {
 // If sqlitePath is empty, only aggregate queries and GetTotalStats will work.
 // If sqliteDB is nil, Search will fall back to LIKE queries and body extraction
 // from raw MIME may be slower.
-func NewDuckDBEngine(analyticsDir string, sqlitePath string, sqliteDB *sql.DB) (*DuckDBEngine, error) {
+func NewDuckDBEngine(analyticsDir string, sqlitePath string, sqliteDB *sql.DB, opts ...DuckDBOptions) (*DuckDBEngine, error) {
+	var opt DuckDBOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	// Open in-memory DuckDB
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
@@ -69,20 +94,24 @@ func NewDuckDBEngine(analyticsDir string, sqlitePath string, sqliteDB *sql.DB) (
 		return nil, fmt.Errorf("set threads: %w", err)
 	}
 
-	// Install and load SQLite extension if we have a SQLite path
-	if sqlitePath != "" {
+	// Install and load SQLite extension if we have a SQLite path.
+	// On Windows, the sqlite_scanner extension is not available for MinGW
+	// builds — all detail queries route through sqliteEngine instead.
+	// DisableSQLiteScanner forces the same fallback on any platform (for testing).
+	// On other platforms, try to load but fall back gracefully (e.g. no internet).
+	var hasSQLiteScanner bool
+	if sqlitePath != "" && runtime.GOOS != "windows" && !opt.DisableSQLiteScanner {
 		if _, err := db.Exec("INSTALL sqlite; LOAD sqlite;"); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("load sqlite extension: %w", err)
-		}
-
-		// Attach SQLite database as read-only
-		// Escape single quotes in path to prevent SQL injection
-		escapedPath := strings.ReplaceAll(sqlitePath, "'", "''")
-		attachSQL := fmt.Sprintf("ATTACH '%s' AS sqlite_db (TYPE sqlite, READ_ONLY)", escapedPath)
-		if _, err := db.Exec(attachSQL); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("attach sqlite database: %w", err)
+			log.Printf("[warn] sqlite_scanner extension unavailable, falling back to direct SQLite: %v", err)
+		} else {
+			// Attach SQLite database as read-only
+			escapedPath := strings.ReplaceAll(sqlitePath, "'", "''")
+			attachSQL := fmt.Sprintf("ATTACH '%s' AS sqlite_db (TYPE sqlite, READ_ONLY)", escapedPath)
+			if _, err := db.Exec(attachSQL); err != nil {
+				log.Printf("[warn] failed to attach SQLite via sqlite_scanner, falling back to direct SQLite: %v", err)
+			} else {
+				hasSQLiteScanner = true
+			}
 		}
 	}
 
@@ -94,11 +123,12 @@ func NewDuckDBEngine(analyticsDir string, sqlitePath string, sqliteDB *sql.DB) (
 	}
 
 	return &DuckDBEngine{
-		db:           db,
-		analyticsDir: analyticsDir,
-		sqlitePath:   sqlitePath,
-		sqliteDB:     sqliteDB,
-		sqliteEngine: sqliteEngine,
+		db:               db,
+		analyticsDir:     analyticsDir,
+		sqlitePath:       sqlitePath,
+		sqliteDB:         sqliteDB,
+		sqliteEngine:     sqliteEngine,
+		hasSQLiteScanner: hasSQLiteScanner,
 	}, nil
 }
 
@@ -109,14 +139,18 @@ func (e *DuckDBEngine) QueryContext(ctx context.Context, query string, args ...i
 	return e.db.QueryContext(ctx, query, args...)
 }
 
-// Close releases DuckDB resources.
+// Close releases DuckDB resources, including any cached search temp table.
 func (e *DuckDBEngine) Close() error {
+	e.searchCacheMu.Lock()
+	e.dropSearchCache()
+	e.searchCacheMu.Unlock()
 	return e.db.Close()
 }
 
-// hasSQLite returns true if SQLite is available for detail queries.
+// hasSQLite returns true if DuckDB's sqlite_scanner extension is loaded,
+// allowing sqlite_db.* queries. On Windows this is always false.
 func (e *DuckDBEngine) hasSQLite() bool {
-	return e.sqlitePath != ""
+	return e.hasSQLiteScanner
 }
 
 // parquetGlob returns the glob pattern for reading message Parquet files.
@@ -131,30 +165,70 @@ func (e *DuckDBEngine) parquetPath(table string) string {
 
 // parquetCTEs returns common CTEs for reading all Parquet tables.
 // This is used by aggregate queries that need to join across tables.
+// parquetCTEs returns the WITH clause body that defines CTEs for all Parquet
+// tables. Columns are explicitly cast to their expected types using DuckDB's
+// REPLACE syntax, because Parquet schema inference from SQLite can store
+// integer/boolean columns as VARCHAR, causing type mismatch errors in JOINs
+// and COALESCE expressions.
 func (e *DuckDBEngine) parquetCTEs() string {
 	return fmt.Sprintf(`
 		msg AS (
-			SELECT * FROM read_parquet('%s', hive_partitioning=true)
+			SELECT * REPLACE (
+				CAST(id AS BIGINT) AS id,
+				CAST(source_id AS BIGINT) AS source_id,
+				CAST(source_message_id AS VARCHAR) AS source_message_id,
+				CAST(conversation_id AS BIGINT) AS conversation_id,
+				CAST(subject AS VARCHAR) AS subject,
+				CAST(snippet AS VARCHAR) AS snippet,
+				CAST(size_estimate AS BIGINT) AS size_estimate,
+				COALESCE(TRY_CAST(has_attachments AS BOOLEAN), false) AS has_attachments
+			) FROM read_parquet('%s', hive_partitioning=true)
 		),
 		mr AS (
-			SELECT * FROM read_parquet('%s')
+			SELECT * REPLACE (
+				CAST(message_id AS BIGINT) AS message_id,
+				CAST(participant_id AS BIGINT) AS participant_id,
+				CAST(recipient_type AS VARCHAR) AS recipient_type,
+				CAST(display_name AS VARCHAR) AS display_name
+			) FROM read_parquet('%s')
 		),
 		p AS (
-			SELECT * FROM read_parquet('%s')
+			SELECT * REPLACE (
+				CAST(id AS BIGINT) AS id,
+				CAST(email_address AS VARCHAR) AS email_address,
+				CAST(domain AS VARCHAR) AS domain,
+				CAST(display_name AS VARCHAR) AS display_name
+			) FROM read_parquet('%s')
 		),
 		lbl AS (
-			SELECT * FROM read_parquet('%s')
+			SELECT * REPLACE (
+				CAST(id AS BIGINT) AS id,
+				CAST(name AS VARCHAR) AS name
+			) FROM read_parquet('%s')
 		),
 		ml AS (
-			SELECT * FROM read_parquet('%s')
+			SELECT * REPLACE (
+				CAST(message_id AS BIGINT) AS message_id,
+				CAST(label_id AS BIGINT) AS label_id
+			) FROM read_parquet('%s')
 		),
 		att AS (
-			SELECT message_id, SUM(size) as attachment_size, COUNT(*) as attachment_count
+			SELECT CAST(message_id AS BIGINT) AS message_id,
+				SUM(COALESCE(TRY_CAST(size AS BIGINT), 0)) as attachment_size,
+				COUNT(*) as attachment_count
 			FROM read_parquet('%s')
-			GROUP BY message_id
+			GROUP BY 1
 		),
 		src AS (
-			SELECT * FROM read_parquet('%s')
+			SELECT * REPLACE (
+				CAST(id AS BIGINT) AS id
+			) FROM read_parquet('%s')
+		),
+		conv AS (
+			SELECT * REPLACE (
+				CAST(id AS BIGINT) AS id,
+				CAST(source_conversation_id AS VARCHAR) AS source_conversation_id
+			) FROM read_parquet('%s')
 		)
 	`, e.parquetGlob(),
 		e.parquetPath("message_recipients"),
@@ -162,7 +236,8 @@ func (e *DuckDBEngine) parquetCTEs() string {
 		e.parquetPath("labels"),
 		e.parquetPath("message_labels"),
 		e.parquetPath("attachments"),
-		e.parquetPath("sources"))
+		e.parquetPath("sources"),
+		e.parquetPath("conversations"))
 }
 
 // escapeILIKE escapes ILIKE wildcard characters (% and _) in user input.
@@ -191,32 +266,26 @@ func (e *DuckDBEngine) buildAggregateSearchConditions(searchQuery string, keyCol
 
 	q := search.Parse(searchQuery)
 
-	// Text terms: filter on the view's grouping key columns when provided,
-	// otherwise fall back to subject + sender search.
+	// Text terms: always search subject + sender, plus the view's grouping
+	// key columns when provided (e.g., label name in Labels view).
 	for _, term := range q.TextTerms {
 		termPattern := "%" + escapeILIKE(term) + "%"
-		if len(keyColumns) > 0 {
-			// Filter on the grouping dimension's columns
-			var parts []string
-			for _, col := range keyColumns {
-				parts = append(parts, col+` ILIKE ? ESCAPE '\'`)
-				args = append(args, termPattern)
-			}
-			conditions = append(conditions, "("+strings.Join(parts, " OR ")+")")
-		} else {
-			// Default: search subject and sender (for Senders/Time views)
-			conditions = append(conditions, `(
-				msg.subject ILIKE ? ESCAPE '\' OR
-				EXISTS (
-					SELECT 1 FROM mr mr_search
-					JOIN p p_search ON p_search.id = mr_search.participant_id
-					WHERE mr_search.message_id = msg.id
-					  AND mr_search.recipient_type = 'from'
-					  AND (p_search.email_address ILIKE ? ESCAPE '\' OR p_search.display_name ILIKE ? ESCAPE '\')
-				)
-			)`)
-			args = append(args, termPattern, termPattern, termPattern)
+		var parts []string
+		parts = append(parts, `msg.subject ILIKE ? ESCAPE '\'`)
+		args = append(args, termPattern)
+		parts = append(parts, `EXISTS (
+			SELECT 1 FROM mr mr_search
+			JOIN p p_search ON p_search.id = mr_search.participant_id
+			WHERE mr_search.message_id = msg.id
+			  AND mr_search.recipient_type = 'from'
+			  AND (p_search.email_address ILIKE ? ESCAPE '\' OR p_search.display_name ILIKE ? ESCAPE '\')
+		)`)
+		args = append(args, termPattern, termPattern)
+		for _, col := range keyColumns {
+			parts = append(parts, col+` ILIKE ? ESCAPE '\'`)
+			args = append(args, termPattern)
 		}
+		conditions = append(conditions, "("+strings.Join(parts, " OR ")+")")
 	}
 
 	// from: filter - match sender email
@@ -252,15 +321,38 @@ func (e *DuckDBEngine) buildAggregateSearchConditions(searchQuery string, keyCol
 		args = append(args, subjPattern)
 	}
 
-	// label: filter - exact match (consistent with SearchFast)
-	for _, label := range q.Labels {
-		conditions = append(conditions, `EXISTS (
-			SELECT 1 FROM ml ml_label
-			JOIN l l_label ON l_label.id = ml_label.label_id
-			WHERE ml_label.message_id = msg.id
-			  AND l_label.name = ?
-		)`)
-		args = append(args, label)
+	// label: filter - case-insensitive substring match.
+	// In the Labels aggregate view (keyColumns includes the label column),
+	// filter the grouping column directly so only matching labels appear
+	// in results — not all labels from matching messages.
+	labelKeyCol := ""
+	for _, col := range keyColumns {
+		if strings.HasSuffix(col, ".name") &&
+			strings.HasPrefix(col, "lbl") {
+			labelKeyCol = col
+			break
+		}
+	}
+	if labelKeyCol != "" && len(q.Labels) > 0 {
+		// Labels view: filter the grouped label column directly.
+		// Use OR so label:arrow label:inbox shows both matching labels.
+		var labelParts []string
+		for _, label := range q.Labels {
+			labelParts = append(labelParts, labelKeyCol+` ILIKE ? ESCAPE '\'`)
+			args = append(args, "%"+escapeILIKE(label)+"%")
+		}
+		conditions = append(conditions, "("+strings.Join(labelParts, " OR ")+")")
+	} else {
+		// Non-label views: use EXISTS to filter messages by label.
+		for _, label := range q.Labels {
+			conditions = append(conditions, `EXISTS (
+				SELECT 1 FROM ml ml_label
+				JOIN lbl l_label ON l_label.id = ml_label.label_id
+				WHERE ml_label.message_id = msg.id
+				  AND l_label.name ILIKE ? ESCAPE '\'
+			)`)
+			args = append(args, "%"+escapeILIKE(label)+"%")
+		}
 	}
 
 	// has:attachment filter
@@ -390,6 +482,9 @@ func (e *DuckDBEngine) buildWhereClause(opts AggregateOptions, keyColumns ...str
 	if opts.WithAttachmentsOnly {
 		conditions = append(conditions, "msg.has_attachments = 1")
 	}
+	if opts.HideDeletedFromSource {
+		conditions = append(conditions, "msg.deleted_from_source_at IS NULL")
+	}
 
 	// Text search filter for aggregates - filter on view's key columns
 	searchConds, searchArgs := e.buildAggregateSearchConditions(opts.SearchQuery, keyColumns...)
@@ -511,7 +606,7 @@ func (e *DuckDBEngine) runAggregation(ctx context.Context, def aggViewDef, where
 			SELECT
 				%s as key,
 				COUNT(*) as count,
-				COALESCE(SUM(msg.size_estimate), 0) as total_size,
+				COALESCE(SUM(CAST(msg.size_estimate AS BIGINT)), 0) as total_size,
 				CAST(COALESCE(SUM(att.attachment_size), 0) AS BIGINT) as attachment_size,
 				CAST(COALESCE(SUM(att.attachment_count), 0) AS BIGINT) as attachment_count,
 				COUNT(*) OVER() as total_unique
@@ -593,6 +688,9 @@ func (e *DuckDBEngine) buildFilterConditions(filter MessageFilter) (string, []in
 
 	if filter.WithAttachmentsOnly {
 		conditions = append(conditions, "msg.has_attachments = true")
+	}
+	if filter.HideDeletedFromSource {
+		conditions = append(conditions, "msg.deleted_from_source_at IS NULL")
 	}
 
 	// Sender filter - use EXISTS subquery (becomes semi-join)
@@ -691,15 +789,15 @@ func (e *DuckDBEngine) buildFilterConditions(filter MessageFilter) (string, []in
 		)`)
 	}
 
-	// Label filter - use EXISTS subquery (becomes semi-join)
+	// Label filter - case-insensitive EXISTS subquery (becomes semi-join)
 	if filter.Label != "" {
 		conditions = append(conditions, `EXISTS (
 			SELECT 1 FROM ml
 			JOIN lbl ON lbl.id = ml.label_id
 			WHERE ml.message_id = msg.id
-			  AND lbl.name = ?
+			  AND lbl.name ILIKE ? ESCAPE '\'
 		)`)
-		args = append(args, filter.Label)
+		args = append(args, escapeILIKE(filter.Label))
 	} else if filter.MatchesEmpty(ViewLabels) {
 		conditions = append(conditions, "NOT EXISTS (SELECT 1 FROM ml WHERE ml.message_id = msg.id)")
 	}
@@ -755,6 +853,9 @@ func (e *DuckDBEngine) SubAggregate(ctx context.Context, filter MessageFilter, g
 	}
 	if opts.WithAttachmentsOnly {
 		where += " AND msg.has_attachments = true"
+	}
+	if opts.HideDeletedFromSource {
+		where += " AND msg.deleted_from_source_at IS NULL"
 	}
 
 	// Add search query conditions using the view's key columns
@@ -816,6 +917,9 @@ func (e *DuckDBEngine) GetTotalStats(ctx context.Context, opts StatsOptions) (*T
 	if opts.WithAttachmentsOnly {
 		conditions = append(conditions, "msg.has_attachments = 1")
 	}
+	if opts.HideDeletedFromSource {
+		conditions = append(conditions, "msg.deleted_from_source_at IS NULL")
+	}
 
 	// Search filter — uses EXISTS subqueries so no row multiplication.
 	// For 1:N views (Recipients, RecipientNames, Labels), filter on the
@@ -836,7 +940,7 @@ func (e *DuckDBEngine) GetTotalStats(ctx context.Context, opts StatsOptions) (*T
 		WITH %s
 		SELECT
 			COUNT(*) as message_count,
-			COALESCE(SUM(msg.size_estimate), 0) as total_size,
+			COALESCE(SUM(CAST(msg.size_estimate AS BIGINT)), 0) as total_size,
 			CAST(COALESCE(SUM(att.attachment_count), 0) AS BIGINT) as attachment_count,
 			CAST(COALESCE(SUM(att.attachment_size), 0) AS BIGINT) as attachment_size,
 			COUNT(DISTINCT msg.source_id) as account_count
@@ -880,8 +984,12 @@ func (e *DuckDBEngine) GetTotalStats(ctx context.Context, opts StatsOptions) (*T
 	return stats, nil
 }
 
-// ListAccounts returns accounts from SQLite via DuckDB's sqlite_scan.
+// ListAccounts returns accounts from SQLite via DuckDB's sqlite_scan,
+// or via direct SQLite connection on platforms without sqlite_scanner.
 func (e *DuckDBEngine) ListAccounts(ctx context.Context) ([]AccountInfo, error) {
+	if e.sqliteEngine != nil {
+		return e.sqliteEngine.ListAccounts(ctx)
+	}
 	if !e.hasSQLite() {
 		return nil, fmt.Errorf("ListAccounts requires SQLite: pass sqlitePath to NewDuckDBEngine")
 	}
@@ -963,6 +1071,7 @@ func (e *DuckDBEngine) ListMessages(ctx context.Context, filter MessageFilter) (
 			msg.id,
 			COALESCE(msg.source_message_id, '') as source_message_id,
 			COALESCE(msg.conversation_id, 0) as conversation_id,
+			COALESCE(c.source_conversation_id, '') as source_conversation_id,
 			COALESCE(msg.subject, '') as subject,
 			COALESCE(msg.snippet, '') as snippet,
 			COALESCE(ms.from_email, '') as from_email,
@@ -974,6 +1083,7 @@ func (e *DuckDBEngine) ListMessages(ctx context.Context, filter MessageFilter) (
 		FROM msg
 		JOIN filtered_msgs fm ON fm.id = msg.id
 		LEFT JOIN msg_sender ms ON ms.message_id = msg.id
+		LEFT JOIN conv c ON c.id = msg.conversation_id
 		ORDER BY %s
 	`, e.parquetCTEs(), where, orderBy, orderBy)
 
@@ -994,6 +1104,7 @@ func (e *DuckDBEngine) ListMessages(ctx context.Context, filter MessageFilter) (
 			&msg.ID,
 			&msg.SourceMessageID,
 			&msg.ConversationID,
+			&msg.SourceConversationID,
 			&msg.Subject,
 			&msg.Snippet,
 			&msg.FromEmail,
@@ -1037,46 +1148,23 @@ func parseLabelsJSON(s string) []string {
 }
 
 // fetchLabelsForMessages adds labels to message summaries.
+// Uses DuckDB's sqlite_scanner when available, otherwise direct SQLite.
 func (e *DuckDBEngine) fetchLabelsForMessages(ctx context.Context, messages []MessageSummary) error {
 	if len(messages) == 0 {
 		return nil
 	}
 
-	// Build message ID list
-	ids := make([]interface{}, len(messages))
-	placeholders := make([]string, len(messages))
-	idToIndex := make(map[int64]int)
-	for i, msg := range messages {
-		ids[i] = msg.ID
-		placeholders[i] = "?"
-		idToIndex[msg.ID] = i
+	// Prefer direct SQLite (works on all platforms including Windows)
+	if e.sqliteEngine != nil {
+		return e.sqliteEngine.fetchLabelsForMessages(ctx, messages)
 	}
 
-	query := fmt.Sprintf(`
-		SELECT ml.message_id, l.name
-		FROM sqlite_db.message_labels ml
-		JOIN sqlite_db.labels l ON l.id = ml.label_id
-		WHERE ml.message_id IN (%s)
-	`, strings.Join(placeholders, ","))
-
-	rows, err := e.db.QueryContext(ctx, query, ids...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var msgID int64
-		var labelName string
-		if err := rows.Scan(&msgID, &labelName); err != nil {
-			return err
-		}
-		if idx, ok := idToIndex[msgID]; ok {
-			messages[idx].Labels = append(messages[idx].Labels, labelName)
-		}
+	if !e.hasSQLite() {
+		log.Printf("[warn] fetchLabelsForMessages: no label source available (sqliteEngine=nil, hasSQLiteScanner=false); labels will be empty")
+		return nil
 	}
 
-	return rows.Err()
+	return fetchLabelsForMessageList(ctx, e.db, "sqlite_db.", messages)
 }
 
 // GetMessage retrieves a full message from SQLite.
@@ -1121,202 +1209,7 @@ func (e *DuckDBEngine) GetAttachment(ctx context.Context, id int64) (*Attachment
 }
 
 func (e *DuckDBEngine) getMessageByQuery(ctx context.Context, whereClause string, args ...interface{}) (*MessageDetail, error) {
-	query := fmt.Sprintf(`
-		SELECT
-			m.id,
-			m.source_message_id,
-			m.conversation_id,
-			COALESCE(m.subject, ''),
-			COALESCE(m.snippet, ''),
-			m.sent_at,
-			m.received_at,
-			COALESCE(m.size_estimate, 0),
-			m.has_attachments
-		FROM sqlite_db.messages m
-		WHERE %s
-	`, whereClause)
-
-	var msg MessageDetail
-	var sentAt, receivedAt sql.NullTime
-	err := e.db.QueryRowContext(ctx, query, args...).Scan(
-		&msg.ID,
-		&msg.SourceMessageID,
-		&msg.ConversationID,
-		&msg.Subject,
-		&msg.Snippet,
-		&sentAt,
-		&receivedAt,
-		&msg.SizeEstimate,
-		&msg.HasAttachments,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get message: %w", err)
-	}
-
-	if sentAt.Valid {
-		msg.SentAt = sentAt.Time
-	}
-	if receivedAt.Valid {
-		t := receivedAt.Time
-		msg.ReceivedAt = &t
-	}
-
-	// Fetch body from separate table (PK lookup)
-	var bodyText, bodyHTML sql.NullString
-	err = e.db.QueryRowContext(ctx, `
-		SELECT body_text, body_html FROM sqlite_db.message_bodies WHERE message_id = ?
-	`, msg.ID).Scan(&bodyText, &bodyHTML)
-	if err == nil {
-		if bodyText.Valid {
-			msg.BodyText = bodyText.String
-		}
-		if bodyHTML.Valid {
-			msg.BodyHTML = bodyHTML.String
-		}
-	} else if err != sql.ErrNoRows {
-		return nil, fmt.Errorf("get message body: %w", err)
-	}
-
-	// If body is empty, try to extract from raw MIME
-	if msg.BodyText == "" && msg.BodyHTML == "" {
-		if body, err := e.extractBodyFromRaw(ctx, msg.ID); err == nil && body != "" {
-			msg.BodyText = body
-		}
-	}
-
-	// Fetch participants
-	if err := e.fetchParticipants(ctx, &msg); err != nil {
-		return nil, fmt.Errorf("fetch participants: %w", err)
-	}
-
-	// Fetch labels
-	if err := e.fetchMessageLabels(ctx, &msg); err != nil {
-		return nil, fmt.Errorf("fetch labels: %w", err)
-	}
-
-	// Fetch attachments
-	if err := e.fetchAttachments(ctx, &msg); err != nil {
-		return nil, fmt.Errorf("fetch attachments: %w", err)
-	}
-
-	return &msg, nil
-}
-
-// extractBodyFromRaw extracts text body from compressed MIME data.
-func (e *DuckDBEngine) extractBodyFromRaw(ctx context.Context, messageID int64) (string, error) {
-	var compressed []byte
-	var compression sql.NullString
-
-	err := e.db.QueryRowContext(ctx, `
-		SELECT raw_data, compression FROM sqlite_db.message_raw WHERE message_id = ?
-	`, messageID).Scan(&compressed, &compression)
-	if err != nil {
-		return "", err
-	}
-
-	var rawData []byte
-	if compression.Valid && compression.String == "zlib" {
-		r, err := zlib.NewReader(bytes.NewReader(compressed))
-		if err != nil {
-			return "", err
-		}
-		defer r.Close()
-		rawData, err = io.ReadAll(r)
-		if err != nil {
-			return "", err
-		}
-	} else {
-		rawData = compressed
-	}
-
-	// Parse MIME and extract text
-	parsed, err := mime.Parse(rawData)
-	if err != nil {
-		return "", err
-	}
-
-	return parsed.GetBodyText(), nil
-}
-
-func (e *DuckDBEngine) fetchParticipants(ctx context.Context, msg *MessageDetail) error {
-	rows, err := e.db.QueryContext(ctx, `
-		SELECT mr.recipient_type, p.email_address, COALESCE(mr.display_name, p.display_name, '')
-		FROM sqlite_db.message_recipients mr
-		JOIN sqlite_db.participants p ON p.id = mr.participant_id
-		WHERE mr.message_id = ?
-	`, msg.ID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var recipType, email, name string
-		if err := rows.Scan(&recipType, &email, &name); err != nil {
-			return err
-		}
-		addr := Address{Email: email, Name: name}
-		switch recipType {
-		case "from":
-			msg.From = append(msg.From, addr)
-		case "to":
-			msg.To = append(msg.To, addr)
-		case "cc":
-			msg.Cc = append(msg.Cc, addr)
-		case "bcc":
-			msg.Bcc = append(msg.Bcc, addr)
-		}
-	}
-
-	return rows.Err()
-}
-
-func (e *DuckDBEngine) fetchMessageLabels(ctx context.Context, msg *MessageDetail) error {
-	rows, err := e.db.QueryContext(ctx, `
-		SELECT l.name
-		FROM sqlite_db.message_labels ml
-		JOIN sqlite_db.labels l ON l.id = ml.label_id
-		WHERE ml.message_id = ?
-	`, msg.ID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return err
-		}
-		msg.Labels = append(msg.Labels, name)
-	}
-
-	return rows.Err()
-}
-
-func (e *DuckDBEngine) fetchAttachments(ctx context.Context, msg *MessageDetail) error {
-	rows, err := e.db.QueryContext(ctx, `
-		SELECT id, COALESCE(filename, ''), COALESCE(mime_type, ''), COALESCE(size, 0), COALESCE(content_hash, '')
-		FROM sqlite_db.attachments
-		WHERE message_id = ?
-	`, msg.ID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var att AttachmentInfo
-		if err := rows.Scan(&att.ID, &att.Filename, &att.MimeType, &att.Size, &att.ContentHash); err != nil {
-			return err
-		}
-		msg.Attachments = append(msg.Attachments, att)
-	}
-
-	return rows.Err()
+	return getMessageByQueryShared(ctx, e.db, "sqlite_db.", whereClause, args...)
 }
 
 // Search performs a Gmail-style search query.
@@ -1430,6 +1323,11 @@ func (e *DuckDBEngine) Search(ctx context.Context, q *search.Query, limit, offse
 		args = append(args, *q.AccountID)
 	}
 
+	// Hide-deleted filter
+	if q.HideDeleted {
+		conditions = append(conditions, "m.deleted_from_source_at IS NULL")
+	}
+
 	if limit == 0 {
 		limit = 100
 	}
@@ -1439,6 +1337,7 @@ func (e *DuckDBEngine) Search(ctx context.Context, q *search.Query, limit, offse
 			m.id,
 			m.source_message_id,
 			m.conversation_id,
+			COALESCE(conv.source_conversation_id, ''),
 			COALESCE(m.subject, ''),
 			COALESCE(m.snippet, ''),
 			COALESCE(p_sender.email_address, ''),
@@ -1451,6 +1350,7 @@ func (e *DuckDBEngine) Search(ctx context.Context, q *search.Query, limit, offse
 		FROM sqlite_db.messages m
 		LEFT JOIN sqlite_db.message_recipients mr_sender ON mr_sender.message_id = m.id AND mr_sender.recipient_type = 'from'
 		LEFT JOIN sqlite_db.participants p_sender ON p_sender.id = mr_sender.participant_id
+		LEFT JOIN sqlite_db.conversations conv ON conv.id = m.conversation_id
 		%s
 		WHERE %s
 		ORDER BY m.sent_at DESC
@@ -1474,6 +1374,7 @@ func (e *DuckDBEngine) Search(ctx context.Context, q *search.Query, limit, offse
 			&msg.ID,
 			&msg.SourceMessageID,
 			&msg.ConversationID,
+			&msg.SourceConversationID,
 			&msg.Subject,
 			&msg.Snippet,
 			&msg.FromEmail,
@@ -1509,11 +1410,20 @@ func (e *DuckDBEngine) Search(ctx context.Context, q *search.Query, limit, offse
 	return results, nil
 }
 
-// GetGmailIDsByFilter returns Gmail IDs matching a filter from Parquet files.
-// Uses EXISTS subqueries for efficient semi-join filtering.
+// GetGmailIDsByFilter returns Gmail IDs matching a filter.
+// This method delegates to SQLite for authoritative deletion status.
+// The Parquet cache may be stale if messages were deleted after the last cache build,
+// so we use SQLite directly to ensure deleted messages are properly excluded.
 func (e *DuckDBEngine) GetGmailIDsByFilter(ctx context.Context, filter MessageFilter) ([]string, error) {
+	// Delegate to SQLite for authoritative deletion status.
+	// Parquet cache may be stale if deletions occurred after the last build.
+	if e.sqliteEngine != nil {
+		return e.sqliteEngine.GetGmailIDsByFilter(ctx, filter)
+	}
+
+	// Fall back to Parquet if no SQLite engine available (shouldn't happen in practice)
 	if e.analyticsDir == "" {
-		return nil, fmt.Errorf("GetGmailIDsByFilter requires Parquet data: pass analyticsDir to NewDuckDBEngine")
+		return nil, fmt.Errorf("GetGmailIDsByFilter requires SQLite or Parquet data")
 	}
 
 	var conditions []string
@@ -1588,9 +1498,9 @@ func (e *DuckDBEngine) GetGmailIDsByFilter(ctx context.Context, filter MessageFi
 			SELECT 1 FROM ml
 			JOIN lbl ON lbl.id = ml.label_id
 			WHERE ml.message_id = msg.id
-			  AND lbl.name = ?
+			  AND lbl.name ILIKE ? ESCAPE '\'
 		)`)
-		args = append(args, filter.Label)
+		args = append(args, escapeILIKE(filter.Label))
 	}
 
 	if filter.TimeRange.Period != "" {
@@ -1615,6 +1525,7 @@ func (e *DuckDBEngine) GetGmailIDsByFilter(ctx context.Context, filter MessageFi
 		SELECT msg.source_message_id
 		FROM msg
 		WHERE %s
+		ORDER BY msg.sent_at DESC, msg.id DESC
 	`, e.parquetCTEs(), strings.Join(conditions, " AND "))
 
 	// Only add LIMIT if explicitly set (0 means no limit)
@@ -1629,20 +1540,7 @@ func (e *DuckDBEngine) GetGmailIDsByFilter(ctx context.Context, filter MessageFi
 	}
 	defer rows.Close()
 
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan gmail id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate gmail ids: %w", err)
-	}
-
-	return ids, nil
+	return collectGmailIDs(rows)
 }
 
 // HasParquetData checks if Parquet files exist and are usable.
@@ -1654,6 +1552,43 @@ func HasParquetData(analyticsDir string) bool {
 	}
 	_ = pattern // Used in queries, not glob
 	return len(matches) > 0
+}
+
+// RequiredParquetDirs lists the analytics subdirectories that must each
+// contain at least one .parquet file for the cache to be considered complete.
+// Shared between the cache builder, TUI, and MCP startup paths.
+var RequiredParquetDirs = []string{
+	"messages",
+	"sources",
+	"participants",
+	"message_recipients",
+	"labels",
+	"message_labels",
+	"attachments",
+	"conversations",
+}
+
+// HasCompleteParquetData checks that all required parquet tables exist.
+// Use this instead of HasParquetData when enabling DuckDB, since DuckDB
+// unconditionally reads all tables (including conversations) and will fail
+// at runtime if any are missing.
+func HasCompleteParquetData(analyticsDir string) bool {
+	for _, dir := range RequiredParquetDirs {
+		pattern := filepath.Join(analyticsDir, dir, "*.parquet")
+		matches, _ := filepath.Glob(pattern)
+		if len(matches) > 0 {
+			continue
+		}
+		// For messages, also check hive-partitioned layout (messages/year=*/*.parquet)
+		if dir == "messages" {
+			deepMatches, _ := filepath.Glob(filepath.Join(analyticsDir, dir, "*", "*.parquet"))
+			if len(deepMatches) > 0 {
+				continue
+			}
+		}
+		return false
+	}
+	return true
 }
 
 // ParquetSyncState represents the sync state from _last_sync.json.
@@ -1694,6 +1629,7 @@ func (e *DuckDBEngine) SearchFast(ctx context.Context, q *search.Query, filter M
 			COALESCE(msg.id, 0) as id,
 			COALESCE(msg.source_message_id, '') as source_message_id,
 			COALESCE(msg.conversation_id, 0) as conversation_id,
+			COALESCE(c.source_conversation_id, '') as source_conversation_id,
 			COALESCE(msg.subject, '') as subject,
 			COALESCE(msg.snippet, '') as snippet,
 			COALESCE(ms.from_email, '') as from_email,
@@ -1708,6 +1644,7 @@ func (e *DuckDBEngine) SearchFast(ctx context.Context, q *search.Query, filter M
 		LEFT JOIN msg_sender ms ON ms.message_id = msg.id
 		LEFT JOIN att ON att.message_id = msg.id
 		LEFT JOIN msg_labels mlbl ON mlbl.message_id = msg.id
+		LEFT JOIN conv c ON c.id = msg.conversation_id
 		WHERE %s
 		ORDER BY msg.sent_at DESC
 		LIMIT ? OFFSET ?
@@ -1731,6 +1668,7 @@ func (e *DuckDBEngine) SearchFast(ctx context.Context, q *search.Query, filter M
 			&msg.ID,
 			&msg.SourceMessageID,
 			&msg.ConversationID,
+			&msg.SourceConversationID,
 			&msg.Subject,
 			&msg.Snippet,
 			&msg.FromEmail,
@@ -1790,6 +1728,281 @@ func (e *DuckDBEngine) SearchFastCount(ctx context.Context, q *search.Query, fil
 	return count, nil
 }
 
+// searchCacheKeyFor builds a deterministic cache key from search conditions and args.
+// Same query+filter always produces the same key. Uses JSON encoding to avoid
+// ambiguity from delimiter collisions (e.g. args containing commas or pipes).
+func searchCacheKeyFor(conditions []string, args []interface{}) string {
+	// JSON marshaling is unambiguous: each element is quoted/escaped independently.
+	// Errors are impossible for string/int/float/bool args, but fall back to fmt.
+	key := struct {
+		C []string      `json:"c"`
+		A []interface{} `json:"a"`
+	}{conditions, args}
+	b, err := json.Marshal(key)
+	if err != nil {
+		// Fallback: should never happen with the types buildSearchConditions produces.
+		return fmt.Sprintf("%v#%v", conditions, args)
+	}
+	return string(b)
+}
+
+// dropSearchCache drops the cached temp table and clears all cache fields.
+// Uses context.Background() so cleanup succeeds even if the caller's context
+// is canceled (avoiding leaked temp tables on the single DuckDB connection).
+// Caller must hold e.searchCacheMu.
+func (e *DuckDBEngine) dropSearchCache() {
+	if e.searchCacheTable != "" {
+		_, _ = e.db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", e.searchCacheTable))
+	}
+	e.searchCacheKey = ""
+	e.searchCacheTable = ""
+	e.searchCacheCount = 0
+	e.searchCacheStats = nil
+}
+
+// searchPageFromCache executes Phase 3 (paginated results) from the cached temp table.
+// Returns a SearchFastResult with cached count and stats.
+func (e *DuckDBEngine) searchPageFromCache(ctx context.Context, limit, offset int) (*SearchFastResult, error) {
+	pageQuery := fmt.Sprintf(`
+		WITH %s,
+		page AS (
+			SELECT sm.id FROM %s sm
+			ORDER BY sm.sent_at DESC
+			LIMIT ? OFFSET ?
+		),
+		msg_labels AS (
+			SELECT ml.message_id, LIST(lbl.name ORDER BY lbl.name) as labels
+			FROM ml
+			JOIN lbl ON lbl.id = ml.label_id
+			WHERE ml.message_id IN (SELECT id FROM page)
+			GROUP BY ml.message_id
+		)
+		SELECT
+			sm.id,
+			sm.source_message_id,
+			sm.conversation_id,
+			COALESCE(c.source_conversation_id, '') as source_conversation_id,
+			sm.subject,
+			sm.snippet,
+			sm.from_email,
+			sm.from_name,
+			sm.sent_at,
+			sm.size_estimate,
+			sm.has_attachments,
+			COALESCE(att.attachment_count, 0) as attachment_count,
+			CAST(COALESCE(to_json(mlbl.labels), '[]') AS VARCHAR) as labels,
+			sm.deleted_from_source_at
+		FROM %s sm
+		JOIN page p ON p.id = sm.id
+		LEFT JOIN att ON att.message_id = sm.id
+		LEFT JOIN msg_labels mlbl ON mlbl.message_id = sm.id
+		LEFT JOIN conv c ON c.id = sm.conversation_id
+		ORDER BY sm.sent_at DESC
+	`, e.parquetCTEs(), e.searchCacheTable, e.searchCacheTable)
+
+	rows, err := e.db.QueryContext(ctx, pageQuery, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("search fast page: %w", err)
+	}
+	defer rows.Close()
+
+	// Return a copy of cached stats to prevent callers from mutating the cache
+	var statsCopy *TotalStats
+	if e.searchCacheStats != nil {
+		tmp := *e.searchCacheStats
+		statsCopy = &tmp
+	}
+
+	result := &SearchFastResult{
+		TotalCount: e.searchCacheCount,
+		Stats:      statsCopy,
+	}
+
+	for rows.Next() {
+		var msg MessageSummary
+		var sentAt sql.NullTime
+		var deletedAt sql.NullTime
+		var labelsJSON string
+		if err := rows.Scan(
+			&msg.ID,
+			&msg.SourceMessageID,
+			&msg.ConversationID,
+			&msg.SourceConversationID,
+			&msg.Subject,
+			&msg.Snippet,
+			&msg.FromEmail,
+			&msg.FromName,
+			&sentAt,
+			&msg.SizeEstimate,
+			&msg.HasAttachments,
+			&msg.AttachmentCount,
+			&labelsJSON,
+			&deletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan message: %w", err)
+		}
+		if sentAt.Valid {
+			msg.SentAt = sentAt.Time
+		}
+		if deletedAt.Valid {
+			msg.DeletedAt = &deletedAt.Time
+		}
+		msg.Labels = parseLabelsJSON(labelsJSON)
+		result.Messages = append(result.Messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate messages: %w", err)
+	}
+
+	return result, nil
+}
+
+// computeSearchStats computes stats (Phase 4) from the cached temp table.
+// Returns nil stats on failure (best-effort).
+func (e *DuckDBEngine) computeSearchStats(ctx context.Context) *TotalStats {
+	msgStatsQuery := fmt.Sprintf(`
+		WITH %s
+		SELECT
+			COUNT(*) as message_count,
+			COALESCE(SUM(sm.size_estimate), 0) as total_size,
+			CAST(COALESCE(SUM(att.attachment_count), 0) AS BIGINT) as attachment_count,
+			CAST(COALESCE(SUM(att.attachment_size), 0) AS BIGINT) as attachment_size,
+			COUNT(DISTINCT sm.source_id) as account_count
+		FROM %s sm
+		LEFT JOIN att ON att.message_id = sm.id
+	`, e.parquetCTEs(), e.searchCacheTable)
+
+	stats := &TotalStats{}
+	var attachmentSize sql.NullFloat64
+	if err := e.db.QueryRowContext(ctx, msgStatsQuery).Scan(
+		&stats.MessageCount,
+		&stats.TotalSize,
+		&stats.AttachmentCount,
+		&attachmentSize,
+		&stats.AccountCount,
+	); err != nil {
+		log.Printf("warning: search stats query failed (stats will be nil): %v", err)
+		return nil
+	}
+	if attachmentSize.Valid {
+		stats.AttachmentSize = int64(attachmentSize.Float64)
+	}
+
+	// Label count — only ml/lbl Parquet tables needed.
+	labelStatsQuery := fmt.Sprintf(`
+		WITH %s
+		SELECT COUNT(DISTINCT lbl.name)
+		FROM %s sm
+		JOIN ml ON ml.message_id = sm.id
+		JOIN lbl ON lbl.id = ml.label_id
+	`, e.parquetCTEs(), e.searchCacheTable)
+
+	if err := e.db.QueryRowContext(ctx, labelStatsQuery).Scan(&stats.LabelCount); err != nil {
+		log.Printf("warning: search label count query failed (using 0): %v", err)
+		stats.LabelCount = 0
+	}
+
+	return stats
+}
+
+// SearchFastWithStats performs a single-scan fast search with temp table materialization.
+// It denormalizes matching messages (with sender info) into a temp table using one
+// Parquet scan, then reuses the in-memory temp table for count, pagination, and stats
+// — eliminating all subsequent msg Parquet reads. Only small page-scoped lookups
+// into label/attachment Parquet tables remain.
+//
+// The temp table is cached internally: if the same search conditions+args are
+// requested again (e.g. pagination), the Parquet scan is skipped and the page
+// is served directly from the cached temp table. A new search invalidates the
+// old cache.
+func (e *DuckDBEngine) SearchFastWithStats(ctx context.Context, q *search.Query, queryStr string,
+	filter MessageFilter, statsGroupBy ViewType, limit, offset int) (*SearchFastResult, error) {
+
+	conditions, args := e.buildSearchConditions(q, filter)
+
+	if limit == 0 {
+		limit = 100
+	}
+
+	e.searchCacheMu.Lock()
+	defer e.searchCacheMu.Unlock()
+
+	// Check cache: same conditions+args means same search, serve from cached table.
+	cacheKey := searchCacheKeyFor(conditions, args)
+	if cacheKey == e.searchCacheKey && e.searchCacheTable != "" {
+		// Retry stats if a previous attempt failed (transient error).
+		if e.searchCacheStats == nil {
+			e.searchCacheStats = e.computeSearchStats(ctx)
+		}
+		return e.searchPageFromCache(ctx, limit, offset)
+	}
+
+	// Cache miss — drop old cache and materialize fresh.
+	e.dropSearchCache()
+
+	// Unique temp table name to avoid concurrent collisions.
+	seq := e.tempTableSeq.Add(1)
+	tempTable := fmt.Sprintf("_search_matches_%d", seq)
+
+	// Phase 1: Materialize matching messages into temp table (single Parquet scan).
+	// Stores all columns needed by later phases so they never re-read msg Parquet.
+	// The msg_sender CTE is required because buildSearchConditions references ms.from_email.
+	materializeQuery := fmt.Sprintf(`
+		CREATE TEMP TABLE %s AS
+		WITH %s,
+		msg_sender AS (
+			SELECT mr.message_id,
+				   FIRST(p.email_address) as from_email,
+				   FIRST(COALESCE(mr.display_name, p.display_name, '')) as from_name
+			FROM mr
+			JOIN p ON p.id = mr.participant_id
+			WHERE mr.recipient_type = 'from'
+			GROUP BY mr.message_id
+		)
+		SELECT
+			msg.id,
+			COALESCE(msg.source_message_id, '') as source_message_id,
+			COALESCE(msg.conversation_id, 0) as conversation_id,
+			COALESCE(msg.subject, '') as subject,
+			COALESCE(msg.snippet, '') as snippet,
+			COALESCE(ms.from_email, '') as from_email,
+			COALESCE(ms.from_name, '') as from_name,
+			msg.sent_at,
+			COALESCE(CAST(msg.size_estimate AS BIGINT), 0) as size_estimate,
+			COALESCE(msg.has_attachments, false) as has_attachments,
+			msg.deleted_from_source_at,
+			CAST(msg.source_id AS BIGINT) as source_id
+		FROM msg
+		LEFT JOIN msg_sender ms ON ms.message_id = msg.id
+		WHERE %s
+	`, tempTable, e.parquetCTEs(), strings.Join(conditions, " AND "))
+
+	if _, err := e.db.ExecContext(ctx, materializeQuery, args...); err != nil {
+		return nil, fmt.Errorf("materialize search matches: %w", err)
+	}
+
+	// Store temp table name so we can clean up on error.
+	e.searchCacheTable = tempTable
+
+	// Phase 2: Count (trivial — reads in-memory temp table only).
+	// Best-effort: if count fails, use -1 (unknown total) and continue.
+	var count int64
+	if err := e.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", tempTable)).Scan(&count); err != nil {
+		log.Printf("warning: search count query failed (using -1): %v", err)
+		count = -1
+	}
+	e.searchCacheCount = count
+
+	// Phase 4: Stats from temp table (compute before page so cache is fully populated).
+	e.searchCacheStats = e.computeSearchStats(ctx)
+
+	// Store cache key — cache is now valid.
+	e.searchCacheKey = cacheKey
+
+	// Phase 3: Paginated results from cached temp table.
+	return e.searchPageFromCache(ctx, limit, offset)
+}
+
 // buildSearchConditions builds WHERE conditions for search queries.
 // Shared by SearchFast and SearchFastCount.
 // Note: These conditions reference msg and ms (msg_sender) CTEs.
@@ -1812,6 +2025,9 @@ func (e *DuckDBEngine) buildSearchConditions(q *search.Query, filter MessageFilt
 	}
 	if filter.WithAttachmentsOnly {
 		conditions = append(conditions, "msg.has_attachments = true")
+	}
+	if filter.HideDeletedFromSource {
+		conditions = append(conditions, "msg.deleted_from_source_at IS NULL")
 	}
 	if filter.Sender != "" {
 		conditions = append(conditions, "ms.from_email = ?")
@@ -1838,9 +2054,9 @@ func (e *DuckDBEngine) buildSearchConditions(q *search.Query, filter MessageFilt
 			SELECT 1 FROM ml
 			JOIN lbl ON lbl.id = ml.label_id
 			WHERE ml.message_id = msg.id
-			  AND lbl.name = ?
+			  AND lbl.name ILIKE ? ESCAPE '\'
 		)`)
-		args = append(args, filter.Label)
+		args = append(args, escapeILIKE(filter.Label))
 	}
 	if filter.TimeRange.Period != "" {
 		granularity := inferTimeGranularity(filter.TimeRange.Granularity, filter.TimeRange.Period)
@@ -1890,15 +2106,15 @@ func (e *DuckDBEngine) buildSearchConditions(q *search.Query, filter MessageFilt
 		}
 	}
 
-	// Label filter - use EXISTS subquery
+	// Label filter - case-insensitive substring match
 	if len(q.Labels) > 0 {
 		for _, label := range q.Labels {
 			conditions = append(conditions, `EXISTS (
 				SELECT 1 FROM ml
 				JOIN lbl ON lbl.id = ml.label_id
-				WHERE ml.message_id = msg.id AND lbl.name = ?
+				WHERE ml.message_id = msg.id AND lbl.name ILIKE ? ESCAPE '\'
 			)`)
-			args = append(args, label)
+			args = append(args, "%"+escapeILIKE(label)+"%")
 		}
 	}
 

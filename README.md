@@ -3,10 +3,11 @@
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/Docs-msgvault.io-blue)](https://msgvault.io)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/fDnmxB8Wkq)
 
 [Documentation](https://msgvault.io) · [Setup Guide](https://msgvault.io/guides/oauth-setup/) · [Interactive TUI](https://msgvault.io/usage/tui/)
 
-> **Pre-alpha software.** APIs, storage format, and CLI flags may change without notice. Back up your data.
+> **Alpha software.** APIs, storage format, and CLI flags may change without notice. Back up your data.
 
 Archive a lifetime of email. Analytics and search in milliseconds, entirely offline.
 
@@ -14,11 +15,12 @@ Archive a lifetime of email. Analytics and search in milliseconds, entirely offl
 
 Your messages are yours. Decades of correspondence, attachments, and history shouldn't be locked behind a web interface or an API. msgvault downloads a complete local copy and then everything runs offline. Search, analytics, and the MCP server all work against local data with no network access required.
 
-Currently supports Gmail, with WhatsApp and other messaging platforms planned.
+Currently supports Gmail sync, plus offline imports from MBOX exports and Apple Mail (.emlx) directories.
 
 ## Features
 
 - **Full Gmail backup**: raw MIME, attachments, labels, and metadata
+- **MBOX / Apple Mail import**: import email from MBOX exports or Apple Mail (.emlx) directories
 - **Interactive TUI**: drill-down analytics over your entire message history, powered by DuckDB over Parquet
 - **Full-text search**: FTS5 with Gmail-like query syntax (`from:`, `has:attachment`, date ranges)
 - **MCP server**: access your full archive at the speed of thought in Claude Desktop and other MCP-capable AI agents
@@ -30,11 +32,17 @@ Currently supports Gmail, with WhatsApp and other messaging platforms planned.
 
 ## Installation
 
+**macOS / Linux:**
 ```bash
 curl -fsSL https://msgvault.io/install.sh | bash
 ```
 
-The installer detects your OS and architecture, downloads the latest release from [GitHub Releases](https://github.com/wesm/msgvault/releases), verifies the SHA-256 checksum, and installs the binary. You can [review the script](https://msgvault.io/install.sh) before running, or download a release binary directly from GitHub.
+**Windows (PowerShell):**
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://msgvault.io/install.ps1 | iex"
+```
+
+The installer detects your OS and architecture, downloads the latest release from [GitHub Releases](https://github.com/wesm/msgvault/releases), verifies the SHA-256 checksum, and installs the binary. You can review the script ([bash](https://msgvault.io/install.sh), [PowerShell](https://msgvault.io/install.ps1)) before running, or download a release binary directly from GitHub.
 
 To build from source instead (requires **Go 1.25+** and a C/C++ compiler for CGO and to statically link DuckDB):
 
@@ -42,6 +50,15 @@ To build from source instead (requires **Go 1.25+** and a C/C++ compiler for CGO
 git clone https://github.com/wesm/msgvault.git
 cd msgvault
 make install
+```
+
+**Conda-Forge:**
+
+You can install msgvault [from conda-forge](https://prefix.dev/channels/conda-forge/packages/msgvault) using Pixi or Conda:
+
+```bash
+pixi global install msgvault
+conda install -c conda-forge msgvault
 ```
 
 ## Quick Start
@@ -70,11 +87,24 @@ msgvault tui
 | `stats` | Show archive statistics |
 | `verify EMAIL` | Verify archive integrity against Gmail |
 | `export-eml` | Export a message as `.eml` |
+| `import-mbox` | Import email from an MBOX export or `.zip` of MBOX files |
+| `import-emlx` | Import email from an Apple Mail directory tree |
 | `build-cache` | Rebuild the Parquet analytics cache |
 | `repair-encoding` | Fix UTF-8 encoding issues |
 | `list-senders` / `list-domains` / `list-labels` | Explore metadata |
 
 See the [CLI Reference](https://msgvault.io/cli-reference/) for full details.
+
+## Importing from MBOX or Apple Mail
+
+Import email from providers that offer MBOX exports or from a local Apple Mail data directory:
+
+```bash
+msgvault init-db
+msgvault import-mbox you@example.com /path/to/export.mbox
+msgvault import-mbox you@example.com /path/to/export.zip   # zip of MBOX files
+msgvault import-emlx you@example.com ~/Library/Mail/V10     # Apple Mail
+```
 
 ## Configuration
 
@@ -107,6 +137,10 @@ msgvault includes an MCP server that lets AI assistants search, analyze, and rea
 - [MCP Server](https://msgvault.io/usage/chat/): AI assistant integration
 - [Troubleshooting](https://msgvault.io/troubleshooting/): common issues and fixes
 - [Development](https://msgvault.io/development/): contributing, testing, building
+
+## Community
+
+Join the [msgvault Discord](https://discord.gg/fDnmxB8Wkq) to ask questions, share feedback, report issues, and connect with other users.
 
 ## Development
 

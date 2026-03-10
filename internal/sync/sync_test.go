@@ -1,15 +1,79 @@
 package sync
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/wesm/msgvault/internal/gmail"
+	"github.com/wesm/msgvault/internal/mime"
 	"github.com/wesm/msgvault/internal/store"
 	testemail "github.com/wesm/msgvault/internal/testutil/email"
 )
+
+// panicOnBatchAPI wraps a MockAPI and panics when GetMessagesRawBatch is called.
+// Used to test that Full() recovers from panics gracefully.
+type panicOnBatchAPI struct {
+	*gmail.MockAPI
+}
+
+func (p *panicOnBatchAPI) GetMessagesRawBatch(_ context.Context, _ []string) ([]*gmail.RawMessage, error) {
+	panic("unexpected nil pointer in batch processing")
+}
+
+func TestFullSync_PanicReturnsError(t *testing.T) {
+	env := newTestEnv(t)
+	seedMessages(env, 1, 12345, "msg1")
+
+	// Replace the client with one that panics during batch fetch
+	env.Syncer = New(&panicOnBatchAPI{MockAPI: env.Mock}, env.Store, nil)
+
+	// Should return an error, NOT panic and crash the program
+	_, err := env.Syncer.Full(env.Context, testEmail)
+	if err == nil {
+		t.Fatal("expected error from panic recovery, got nil")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("expected error to mention panic, got: %v", err)
+	}
+}
+
+// panicOnHistoryAPI wraps a MockAPI and panics when ListHistory is called.
+// Used to test that Incremental() recovers from panics gracefully.
+type panicOnHistoryAPI struct {
+	*gmail.MockAPI
+}
+
+func (p *panicOnHistoryAPI) ListHistory(_ context.Context, _ uint64, _ string) (*gmail.HistoryResponse, error) {
+	panic("unexpected nil pointer in history processing")
+}
+
+func TestIncrementalSync_PanicReturnsError(t *testing.T) {
+	env := newTestEnv(t)
+	env.CreateSourceWithHistory(t, "12340")
+
+	env.Mock.Profile.MessagesTotal = 10
+	env.Mock.Profile.HistoryID = 12350
+
+	// Replace the client with one that panics during history fetch
+	env.Syncer = New(&panicOnHistoryAPI{MockAPI: env.Mock}, env.Store, nil)
+
+	// Should return an error, NOT panic and crash the program
+	_, err := env.Syncer.Incremental(env.Context, testEmail)
+	if err == nil {
+		t.Fatal("expected error from panic recovery, got nil")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("expected error to mention panic, got: %v", err)
+	}
+}
 
 func TestFullSync(t *testing.T) {
 	env := newTestEnv(t)
@@ -91,6 +155,113 @@ func TestMIMEParsing(t *testing.T) {
 	summary := runFullSync(t, env)
 	assertSummary(t, summary, WantSummary{Added: intPtr(1)})
 	assertAttachmentCount(t, env.Store, 1)
+}
+
+func TestStoreAttachment_ComputesHashWhenMissing(t *testing.T) {
+	env := newTestEnv(t)
+
+	attachmentsDir := filepath.Join(env.TmpDir, "attachments")
+	env.SetOptions(t, func(o *Options) {
+		o.AttachmentsDir = attachmentsDir
+	})
+
+	src := env.CreateSource(t)
+	convID, err := env.Store.EnsureConversation(src.ID, "t1", "Thread")
+	if err != nil {
+		t.Fatalf("EnsureConversation: %v", err)
+	}
+	messageID, err := env.Store.UpsertMessage(&store.Message{
+		ConversationID:  convID,
+		SourceID:        src.ID,
+		SourceMessageID: "m1",
+		MessageType:     "email",
+	})
+	if err != nil {
+		t.Fatalf("UpsertMessage: %v", err)
+	}
+
+	content := []byte("hello")
+	sum := sha256.Sum256(content)
+	wantHash := hex.EncodeToString(sum[:])
+
+	att := mime.Attachment{
+		Filename:    "a.txt",
+		ContentType: "text/plain",
+		Size:        len(content),
+		ContentHash: "",
+		Content:     content,
+	}
+	if err := env.Syncer.storeAttachment(messageID, &att); err != nil {
+		t.Fatalf("storeAttachment: %v", err)
+	}
+	if att.ContentHash != wantHash {
+		t.Fatalf("ContentHash = %q, want %q", att.ContentHash, wantHash)
+	}
+
+	var gotHash, storagePath string
+	if err := env.Store.DB().QueryRow(`SELECT content_hash, storage_path FROM attachments WHERE message_id = ?`, messageID).Scan(&gotHash, &storagePath); err != nil {
+		t.Fatalf("select attachment: %v", err)
+	}
+	if gotHash != wantHash {
+		t.Fatalf("db content_hash = %q, want %q", gotHash, wantHash)
+	}
+
+	fullPath := filepath.Join(attachmentsDir, filepath.FromSlash(storagePath))
+	b, err := os.ReadFile(fullPath)
+	if err != nil {
+		t.Fatalf("read attachment file: %v", err)
+	}
+	if string(b) != string(content) {
+		t.Fatalf("attachment file contents = %q, want %q", string(b), string(content))
+	}
+}
+
+func TestStoreAttachment_InvalidContentHash_ReturnsError(t *testing.T) {
+	env := newTestEnv(t)
+
+	attachmentsDir := filepath.Join(env.TmpDir, "attachments")
+	env.SetOptions(t, func(o *Options) {
+		o.AttachmentsDir = attachmentsDir
+	})
+
+	src := env.CreateSource(t)
+	convID, err := env.Store.EnsureConversation(src.ID, "t1", "Thread")
+	if err != nil {
+		t.Fatalf("EnsureConversation: %v", err)
+	}
+	messageID, err := env.Store.UpsertMessage(&store.Message{
+		ConversationID:  convID,
+		SourceID:        src.ID,
+		SourceMessageID: "m1",
+		MessageType:     "email",
+	})
+	if err != nil {
+		t.Fatalf("UpsertMessage: %v", err)
+	}
+
+	content := []byte("hello")
+	att := mime.Attachment{
+		Filename:    "a.txt",
+		ContentType: "text/plain",
+		Size:        len(content),
+		ContentHash: "nope", // malformed
+		Content:     content,
+	}
+	if err := env.Syncer.storeAttachment(messageID, &att); err == nil {
+		t.Fatalf("expected error")
+	}
+
+	if _, statErr := os.Stat(attachmentsDir); statErr == nil {
+		t.Fatalf("attachments dir should not have been created for invalid content hash")
+	}
+
+	var count int
+	if err := env.Store.DB().QueryRow(`SELECT COUNT(*) FROM attachments WHERE message_id = ?`, messageID).Scan(&count); err != nil {
+		t.Fatalf("count attachments: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("count = %d, want 0", count)
+	}
 }
 
 func TestFullSyncEmptyInbox(t *testing.T) {
@@ -294,12 +465,24 @@ func TestIncrementalSyncWithLabelAdded(t *testing.T) {
 
 	runFullSync(t, env)
 
+	// Record call count after full sync
+	callsAfterFull := len(env.Mock.GetMessageCalls)
+
 	// Now simulate label addition via incremental
 	env.SetHistory(12350, historyLabelAdded("msg1", "STARRED"))
-	env.Mock.Messages["msg1"].LabelIDs = []string{"INBOX", "STARRED"}
 
 	summary := runIncrementalSync(t, env)
 	assertSummary(t, summary, WantSummary{Found: intPtr(1)})
+
+	// No additional GetMessageRaw calls should have been made for the existing message
+	callsAfterIncr := len(env.Mock.GetMessageCalls)
+	if callsAfterIncr != callsAfterFull {
+		t.Errorf("expected 0 GetMessageRaw calls during incremental, got %d (full: %d, after: %d)",
+			callsAfterIncr-callsAfterFull, callsAfterFull, callsAfterIncr)
+	}
+
+	// Verify the label was actually added in the database
+	assertMessageHasLabel(t, env.Store, "msg1", "STARRED")
 }
 
 func TestIncrementalSyncWithLabelRemoved(t *testing.T) {
@@ -310,12 +493,29 @@ func TestIncrementalSyncWithLabelRemoved(t *testing.T) {
 
 	runFullSync(t, env)
 
+	// Verify STARRED exists after full sync
+	assertMessageHasLabel(t, env.Store, "msg1", "STARRED")
+
+	// Record call count after full sync
+	callsAfterFull := len(env.Mock.GetMessageCalls)
+
 	// Now simulate label removal via incremental
 	env.SetHistory(12350, historyLabelRemoved("msg1", "STARRED"))
-	env.Mock.Messages["msg1"].LabelIDs = []string{"INBOX"}
 
 	summary := runIncrementalSync(t, env)
 	assertSummary(t, summary, WantSummary{Found: intPtr(1)})
+
+	// No additional GetMessageRaw calls should have been made
+	callsAfterIncr := len(env.Mock.GetMessageCalls)
+	if callsAfterIncr != callsAfterFull {
+		t.Errorf("expected 0 GetMessageRaw calls during incremental, got %d",
+			callsAfterIncr-callsAfterFull)
+	}
+
+	// Verify the label was actually removed in the database
+	assertMessageNotHasLabel(t, env.Store, "msg1", "STARRED")
+	// INBOX should still be there
+	assertMessageHasLabel(t, env.Store, "msg1", "INBOX")
 }
 
 func TestIncrementalSyncLabelAddedToNewMessage(t *testing.T) {
@@ -463,6 +663,209 @@ func TestFullSync_MessageVariations(t *testing.T) {
 				tt.check(t, env)
 			}
 		})
+	}
+}
+
+func TestFullSync_Latin1InFromName(t *testing.T) {
+	env := newTestEnv(t)
+	seedMessages(env, 1, 12345, "msg")
+
+	// Build a MIME message with an RFC 2047 encoded From name that claims UTF-8
+	// but actually contains Latin-1 bytes. This is a real-world scenario where a
+	// sender's MUA mis-labels the charset, producing invalid UTF-8 after decoding.
+	// The =C9 byte is Latin-1 É, which is not valid UTF-8 when surrounded by ASCII.
+	raw := []byte("From: =?UTF-8?Q?Jane_Doe=C9ric?= <sender@example.com>\n" +
+		"To: recipient@example.com\n" +
+		"Subject: Test\n" +
+		"Date: Mon, 01 Jan 2024 12:00:00 +0000\n" +
+		"Content-Type: text/plain; charset=\"utf-8\"\n" +
+		"\n" +
+		"Body text.\n")
+
+	env.Mock.Messages["msg"].Raw = raw
+	env.Mock.Messages["msg"].SizeEstimate = int64(len(raw))
+
+	summary := runFullSync(t, env)
+	assertSummary(t, summary, WantSummary{Added: intPtr(1), Errors: intPtr(0)})
+
+	// Verify the participant display_name in the participants table is valid UTF-8.
+	// Before the fix, raw Latin-1 bytes would be stored as-is, causing DuckDB errors
+	// when exporting to Parquet.
+	displayName, err := env.Store.InspectParticipantDisplayName("sender@example.com")
+	if err != nil {
+		t.Fatalf("InspectParticipantDisplayName: %v", err)
+	}
+	// EnsureUTF8 should convert the Latin-1 \xC9 to the UTF-8 É (U+00C9)
+	want := "Jane DoeÉric"
+	if displayName != want {
+		t.Errorf("participant display_name = %q, want %q", displayName, want)
+	}
+
+	// Also verify the message_recipients display_name is valid
+	recipDisplayName, err := env.Store.InspectDisplayName("msg", "from", "sender@example.com")
+	if err != nil {
+		t.Fatalf("InspectDisplayName: %v", err)
+	}
+	if recipDisplayName != want {
+		t.Errorf("recipient display_name = %q, want %q", recipDisplayName, want)
+	}
+}
+
+func TestFullSync_InvalidUTF8InAllAddressFields(t *testing.T) {
+	env := newTestEnv(t)
+	seedMessages(env, 1, 12345, "msg")
+
+	// Test that UTF-8 validation applies to all address fields (To, Cc, Bcc),
+	// not just From. Uses Windows-1252 smart quotes (\x93, \x94) mis-labeled as UTF-8,
+	// a common real-world scenario from Outlook emails.
+	raw := []byte("From: =?UTF-8?Q?=93From=94_Name?= <from@example.com>\n" +
+		"To: =?UTF-8?Q?=93To=94_Name?= <to@example.com>\n" +
+		"Cc: =?UTF-8?Q?=93Cc=94_Name?= <cc@example.com>\n" +
+		"Bcc: =?UTF-8?Q?=93Bcc=94_Name?= <bcc@example.com>\n" +
+		"Subject: Test\n" +
+		"Date: Mon, 01 Jan 2024 12:00:00 +0000\n" +
+		"Content-Type: text/plain; charset=\"utf-8\"\n" +
+		"\n" +
+		"Body text.\n")
+
+	env.Mock.Messages["msg"].Raw = raw
+	env.Mock.Messages["msg"].SizeEstimate = int64(len(raw))
+
+	summary := runFullSync(t, env)
+	assertSummary(t, summary, WantSummary{Added: intPtr(1), Errors: intPtr(0)})
+
+	// EnsureUTF8 should detect Windows-1252 and convert smart quotes to their
+	// proper Unicode equivalents: \x93 → U+201C ("), \x94 → U+201D (")
+	tests := []struct {
+		recipType string
+		email     string
+	}{
+		{"from", "from@example.com"},
+		{"to", "to@example.com"},
+		{"cc", "cc@example.com"},
+		{"bcc", "bcc@example.com"},
+	}
+	for _, tt := range tests {
+		// Verify participants table has valid UTF-8
+		displayName, err := env.Store.InspectParticipantDisplayName(tt.email)
+		if err != nil {
+			t.Fatalf("InspectParticipantDisplayName(%s): %v", tt.email, err)
+		}
+		titled := strings.ToUpper(tt.recipType[:1]) + tt.recipType[1:]
+		want := "\u201c" + titled + "\u201d Name"
+		if displayName != want {
+			t.Errorf("participant %s display_name = %q, want %q", tt.email, displayName, want)
+		}
+
+		// Verify message_recipients table has valid UTF-8
+		recipName, err := env.Store.InspectDisplayName("msg", tt.recipType, tt.email)
+		if err != nil {
+			t.Fatalf("InspectDisplayName(%s, %s): %v", tt.recipType, tt.email, err)
+		}
+		if recipName != want {
+			t.Errorf("recipient %s/%s display_name = %q, want %q", tt.recipType, tt.email, recipName, want)
+		}
+	}
+}
+
+func TestFullSync_InvalidUTF8InAttachmentFilename(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Construct a MIME message with raw Latin-1 byte \xE9 (é) in the attachment
+	// filename. Enmime sanitizes invalid bytes to U+FFFD before our code sees them;
+	// the sync-level EnsureUTF8 call is defense-in-depth for any future parser changes.
+	raw := []byte("From: sender@example.com\n" +
+		"To: recipient@example.com\n" +
+		"Subject: Attachment Test\n" +
+		"Date: Mon, 01 Jan 2024 12:00:00 +0000\n" +
+		"MIME-Version: 1.0\n" +
+		"Content-Type: multipart/mixed; boundary=\"b\"\n" +
+		"\n" +
+		"--b\n" +
+		"Content-Type: text/plain; charset=\"utf-8\"\n\nBody text.\n" +
+		"--b\n" +
+		"Content-Type: application/pdf; name=\"caf\xe9.pdf\"\n" +
+		"Content-Disposition: attachment; filename=\"caf\xe9.pdf\"\n" +
+		"Content-Transfer-Encoding: base64\n\n" +
+		"SGVsbG8gV29ybGQh\n" +
+		"--b--\n")
+
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg-attach", raw, []string{"INBOX"})
+
+	withAttachmentsDir(t, env)
+
+	summary := runFullSync(t, env)
+	assertSummary(t, summary, WantSummary{Added: intPtr(1)})
+	assertAttachmentCount(t, env.Store, 1)
+
+	filename, mimeType, err := env.Store.InspectAttachment("msg-attach")
+	if err != nil {
+		t.Fatalf("InspectAttachment: %v", err)
+	}
+
+	// Enmime replaces the invalid \xE9 byte with U+FFFD (replacement character).
+	// Our EnsureUTF8 would convert it to the proper é if enmime didn't sanitize first.
+	// Either way, the stored filename must be valid UTF-8 and preserve the base name.
+	if !utf8.ValidString(filename) {
+		t.Errorf("attachment filename %q is not valid UTF-8", filename)
+	}
+	if !strings.HasPrefix(filename, "caf") || !strings.HasSuffix(filename, ".pdf") {
+		t.Errorf("attachment filename = %q, want caf*.pdf pattern", filename)
+	}
+
+	// Content-type should be the clean base MIME type
+	if mimeType != "application/pdf" {
+		t.Errorf("attachment mime_type = %q, want %q", mimeType, "application/pdf")
+	}
+}
+
+func TestFullSync_MultipleEncodingIssuesSameMessage(t *testing.T) {
+	env := newTestEnv(t)
+	seedMessages(env, 1, 12345, "msg")
+
+	// Real-world scenario: a single email with multiple encoding issues.
+	// Latin-1 É (\xC9) in From name, and Windows-1252 smart quote (\x93) in To name.
+	raw := []byte("From: =?UTF-8?Q?Doe=C9ric?= <from@example.com>\n" +
+		"To: =?UTF-8?Q?=93Quoted=94?= <to@example.com>\n" +
+		"Subject: =?UTF-8?Q?Caf=E9?=\n" +
+		"Date: Mon, 01 Jan 2024 12:00:00 +0000\n" +
+		"Content-Type: text/plain; charset=\"utf-8\"\n" +
+		"\n" +
+		"Body text.\n")
+
+	env.Mock.Messages["msg"].Raw = raw
+	env.Mock.Messages["msg"].SizeEstimate = int64(len(raw))
+
+	summary := runFullSync(t, env)
+	assertSummary(t, summary, WantSummary{Added: intPtr(1), Errors: intPtr(0)})
+
+	// From name: Latin-1 \xC9 → UTF-8 É
+	fromName, err := env.Store.InspectParticipantDisplayName("from@example.com")
+	if err != nil {
+		t.Fatalf("InspectParticipantDisplayName(from): %v", err)
+	}
+	if fromName != "DoeÉric" {
+		t.Errorf("from display_name = %q, want %q", fromName, "DoeÉric")
+	}
+
+	// To name: Windows-1252 \x93/\x94 → Unicode left/right double quotes
+	toName, err := env.Store.InspectParticipantDisplayName("to@example.com")
+	if err != nil {
+		t.Fatalf("InspectParticipantDisplayName(to): %v", err)
+	}
+	if toName != "\u201cQuoted\u201d" {
+		t.Errorf("to display_name = %q, want %q", toName, "\u201cQuoted\u201d")
+	}
+
+	// Subject: Latin-1 \xE9 → UTF-8 é (already validated by existing code path)
+	insp, err := env.Store.InspectMessage("msg")
+	if err != nil {
+		t.Fatalf("InspectMessage: %v", err)
+	}
+	if !strings.Contains(insp.RecipientDisplayName["from:from@example.com"], "É") {
+		t.Errorf("from recipient display_name %q should contain É", insp.RecipientDisplayName["from:from@example.com"])
 	}
 }
 
@@ -1012,9 +1415,183 @@ func TestAttachmentFilePermissions(t *testing.T) {
 	}
 
 	// File should have 0600 permissions (owner read/write only)
-	got := info.Mode().Perm()
-	want := os.FileMode(0600)
-	if got != want {
-		t.Errorf("attachment file permissions = %04o, want %04o", got, want)
+	// Windows does not support Unix permissions.
+	if runtime.GOOS != "windows" {
+		got := info.Mode().Perm()
+		want := os.FileMode(0600)
+		if got != want {
+			t.Errorf("attachment file permissions = %04o, want %04o", got, want)
+		}
 	}
+}
+
+// TestIncrementalSyncLabelAddAndRemoveOnExisting verifies that adding and removing
+// labels on the same existing message in a single history page applies correctly
+// and makes NO API calls to re-fetch the message.
+func TestIncrementalSyncLabelAddAndRemoveOnExisting(t *testing.T) {
+	env := newTestEnv(t)
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12340
+	env.Mock.AddMessage("msg1", testMIME(), []string{"INBOX", "STARRED"})
+
+	runFullSync(t, env)
+
+	// Verify starting labels
+	assertMessageHasLabel(t, env.Store, "msg1", "INBOX")
+	assertMessageHasLabel(t, env.Store, "msg1", "STARRED")
+
+	callsAfterFull := len(env.Mock.GetMessageCalls)
+
+	// Simulate: TRASH added + INBOX removed (what Gmail does for delete)
+	env.SetHistory(12350,
+		historyLabelAdded("msg1", "TRASH"),
+		historyLabelRemoved("msg1", "INBOX"),
+	)
+
+	summary := runIncrementalSync(t, env)
+	assertSummary(t, summary, WantSummary{Found: intPtr(2)})
+
+	// Zero additional API calls
+	callsAfterIncr := len(env.Mock.GetMessageCalls)
+	if callsAfterIncr != callsAfterFull {
+		t.Errorf("expected 0 GetMessageRaw calls during incremental, got %d",
+			callsAfterIncr-callsAfterFull)
+	}
+
+	// Verify label state: TRASH and STARRED remain, INBOX removed
+	assertMessageHasLabel(t, env.Store, "msg1", "TRASH")
+	assertMessageHasLabel(t, env.Store, "msg1", "STARRED")
+	assertMessageNotHasLabel(t, env.Store, "msg1", "INBOX")
+}
+
+// TestIncrementalSyncBatchDeletions verifies that multiple deletions in a single
+// history page are applied in batch.
+func TestIncrementalSyncBatchDeletions(t *testing.T) {
+	env := newTestEnv(t)
+	seedMessages(env, 4, 12340, "msg1", "msg2", "msg3", "msg4")
+
+	runFullSync(t, env)
+	assertMessageCount(t, env.Store, 4)
+
+	// Delete 3 messages in a single history page
+	env.SetHistory(12350,
+		historyDeleted("msg1"),
+		historyDeleted("msg2"),
+		historyDeleted("msg4"),
+	)
+
+	summary := runIncrementalSync(t, env)
+	assertSummary(t, summary, WantSummary{Found: intPtr(3)})
+
+	assertDeletedFromSource(t, env.Store, "msg1", true)
+	assertDeletedFromSource(t, env.Store, "msg2", true)
+	assertDeletedFromSource(t, env.Store, "msg3", false)
+	assertDeletedFromSource(t, env.Store, "msg4", true)
+}
+
+// TestIncrementalSyncBatchNewMessages verifies that multiple new messages in a
+// single history page are fetched via GetMessagesRawBatch (not one at a time).
+func TestIncrementalSyncBatchNewMessages(t *testing.T) {
+	env := newTestEnv(t)
+	env.CreateSourceWithHistory(t, "12340")
+
+	env.Mock.Profile.MessagesTotal = 5
+	env.Mock.Profile.HistoryID = 12350
+	for i := 1; i <= 5; i++ {
+		id := fmt.Sprintf("new-%d", i)
+		env.Mock.AddMessage(id, testMIME(), []string{"INBOX"})
+	}
+
+	env.SetHistory(12350,
+		historyAdded("new-1"),
+		historyAdded("new-2"),
+		historyAdded("new-3"),
+		historyAdded("new-4"),
+		historyAdded("new-5"),
+	)
+
+	summary := runIncrementalSync(t, env)
+	assertSummary(t, summary, WantSummary{Added: intPtr(5)})
+	assertMessageCount(t, env.Store, 5)
+}
+
+// TestIncrementalSyncMixedOperations tests a history page with adds, deletes,
+// and label changes all at once.
+func TestIncrementalSyncMixedOperations(t *testing.T) {
+	env := newTestEnv(t)
+	seedMessages(env, 2, 12340, "existing-1", "existing-2")
+
+	runFullSync(t, env)
+	assertMessageCount(t, env.Store, 2)
+
+	callsAfterFull := len(env.Mock.GetMessageCalls)
+
+	// Add new messages to mock
+	env.Mock.AddMessage("new-1", testMIME(), []string{"INBOX"})
+
+	// Mixed history: add a new msg, delete an existing msg, change labels on another
+	env.SetHistory(12350,
+		historyAdded("new-1"),
+		historyDeleted("existing-1"),
+		historyLabelAdded("existing-2", "STARRED"),
+	)
+
+	summary := runIncrementalSync(t, env)
+	assertSummary(t, summary, WantSummary{Found: intPtr(3), Added: intPtr(1)})
+
+	// 1 new message fetched (batch), 0 for label change on existing
+	callsAfterIncr := len(env.Mock.GetMessageCalls)
+	// GetMessagesRawBatch calls GetMessageRaw internally in MockAPI, so 1 call for new-1
+	newCalls := callsAfterIncr - callsAfterFull
+	if newCalls != 1 {
+		t.Errorf("expected 1 GetMessageRaw call for new message, got %d", newCalls)
+	}
+
+	assertDeletedFromSource(t, env.Store, "existing-1", true)
+	assertMessageHasLabel(t, env.Store, "existing-2", "STARRED")
+	assertMessageCount(t, env.Store, 3) // 2 original (1 deleted but still counted) + 1 new
+}
+
+// TestIncrementalSyncLabelRemovedWithMissingRaw verifies that removing a label
+// from a message whose raw MIME data is missing still succeeds. The label-removal
+// path operates on the message_labels table directly and never touches raw data.
+func TestIncrementalSyncLabelRemovedWithMissingRaw(t *testing.T) {
+	env := newTestEnv(t)
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12340
+	env.Mock.AddMessage("msg1", testMIME(), []string{"INBOX", "STARRED"})
+
+	runFullSync(t, env)
+
+	// Verify starting state
+	assertMessageHasLabel(t, env.Store, "msg1", "STARRED")
+	assertRawDataExists(t, env.Store, "msg1")
+
+	// Delete raw MIME data to simulate missing raw
+	_, err := env.Store.DB().Exec(`
+		DELETE FROM message_raw WHERE message_id = (
+			SELECT id FROM messages WHERE source_message_id = 'msg1'
+		)`)
+	if err != nil {
+		t.Fatalf("delete raw data: %v", err)
+	}
+
+	// Record raw fetch count before incremental sync
+	callsBeforeIncr := len(env.Mock.GetMessageCalls)
+
+	// Now simulate label removal via incremental sync
+	env.SetHistory(12350, historyLabelRemoved("msg1", "STARRED"))
+
+	summary := runIncrementalSync(t, env)
+	assertSummary(t, summary, WantSummary{Found: intPtr(1)})
+
+	// No raw fetches should occur for label-only changes
+	callsAfterIncr := len(env.Mock.GetMessageCalls)
+	if newCalls := callsAfterIncr - callsBeforeIncr; newCalls != 0 {
+		t.Errorf("expected 0 GetMessageRaw calls for label removal, got %d", newCalls)
+	}
+
+	// Label should be removed despite missing raw data
+	assertMessageNotHasLabel(t, env.Store, "msg1", "STARRED")
+	assertMessageHasLabel(t, env.Store, "msg1", "INBOX")
 }

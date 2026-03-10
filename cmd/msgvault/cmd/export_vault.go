@@ -65,7 +65,7 @@ func runExportVault(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	// Load config
-	cfg, err := config.Load("")
+	cfg, err := config.Load("", "")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}

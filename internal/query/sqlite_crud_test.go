@@ -3,6 +3,7 @@ package query
 import (
 	"testing"
 
+	"github.com/wesm/msgvault/internal/search"
 	"github.com/wesm/msgvault/internal/testutil/dbtest"
 )
 
@@ -145,6 +146,11 @@ func TestListMessages_Filters(t *testing.T) {
 		{
 			name:      "Filter by label",
 			filter:    MessageFilter{Label: "Work"},
+			wantCount: 2,
+		},
+		{
+			name:      "Filter by label case-insensitive",
+			filter:    MessageFilter{Label: "work"},
 			wantCount: 2,
 		},
 		{
@@ -416,6 +422,67 @@ func TestWithAttachmentsOnlyStats(t *testing.T) {
 	}
 }
 
+func TestHideDeletedFromSourceSearchFast(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Mark message 1 as deleted
+	env.MarkDeletedByID(1)
+
+	// Use an empty query (matches all messages)
+	q := &search.Query{}
+
+	// SearchFast without filter: all 5 messages
+	all, err := env.Engine.SearchFast(env.Ctx, q, MessageFilter{}, 100, 0)
+	if err != nil {
+		t.Fatalf("SearchFast: %v", err)
+	}
+	if len(all) != 5 {
+		t.Errorf("SearchFast without filter: expected 5, got %d", len(all))
+	}
+
+	// SearchFast with HideDeletedFromSource: 4 messages
+	hidden, err := env.Engine.SearchFast(env.Ctx, q, MessageFilter{HideDeletedFromSource: true}, 100, 0)
+	if err != nil {
+		t.Fatalf("SearchFast(hide-deleted): %v", err)
+	}
+	if len(hidden) != 4 {
+		t.Errorf("SearchFast with hide-deleted: expected 4, got %d", len(hidden))
+	}
+
+	// SearchFastCount must agree
+	count, err := env.Engine.SearchFastCount(env.Ctx, q, MessageFilter{HideDeletedFromSource: true})
+	if err != nil {
+		t.Fatalf("SearchFastCount(hide-deleted): %v", err)
+	}
+	if count != 4 {
+		t.Errorf("SearchFastCount with hide-deleted: expected 4, got %d", count)
+	}
+}
+
+func TestHideDeletedFromSourceStats(t *testing.T) {
+	env := newTestEnv(t)
+
+	allStats := env.MustGetTotalStats(StatsOptions{})
+	if allStats.MessageCount != 5 {
+		t.Errorf("expected 5 total messages, got %d", allStats.MessageCount)
+	}
+
+	// Mark message 1 as deleted
+	env.MarkDeletedByID(1)
+
+	// Without HideDeletedFromSource: still 5
+	stats := env.MustGetTotalStats(StatsOptions{})
+	if stats.MessageCount != 5 {
+		t.Errorf("expected 5 messages (deleted included), got %d", stats.MessageCount)
+	}
+
+	// With HideDeletedFromSource: 4
+	hiddenStats := env.MustGetTotalStats(StatsOptions{HideDeletedFromSource: true})
+	if hiddenStats.MessageCount != 4 {
+		t.Errorf("expected 4 messages (deleted hidden), got %d", hiddenStats.MessageCount)
+	}
+}
+
 func TestDeletedMessagesIncludedWithFlag(t *testing.T) {
 	env := newTestEnv(t)
 
@@ -559,6 +626,34 @@ func TestMatchEmptySenderName_CombinedWithDomain(t *testing.T) {
 
 	if len(messages) != 0 {
 		t.Errorf("expected 0 messages for MatchEmptySenderName+Domain, got %d", len(messages))
+	}
+}
+
+func TestGetGmailIDsByFilter_Label(t *testing.T) {
+	env := newTestEnv(t)
+
+	tests := []struct {
+		name    string
+		label   string
+		wantLen int
+	}{
+		{"exact_case", "Work", 2},
+		{"case_insensitive", "work", 2},
+		{"no_match", "Nonexistent", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ids, err := env.Engine.GetGmailIDsByFilter(
+				env.Ctx, MessageFilter{Label: tt.label},
+			)
+			if err != nil {
+				t.Fatalf("GetGmailIDsByFilter: %v", err)
+			}
+			if len(ids) != tt.wantLen {
+				t.Errorf("got %d IDs, want %d", len(ids), tt.wantLen)
+			}
+		})
 	}
 }
 
@@ -965,5 +1060,74 @@ func TestMultipleEmptyTargets(t *testing.T) {
 	// Since it has no sender, there's no domain to aggregate on
 	if len(rows) != 0 {
 		t.Errorf("expected 0 domain sub-aggregate rows for no-sender message, got %d", len(rows))
+	}
+}
+
+// TestGetTotalStatsWithSearchQuery verifies that GetTotalStats filters stats
+// to reflect only messages matching the search query. This is a regression test
+// for a bug where SQLiteEngine.GetTotalStats ignored opts.SearchQuery, returning
+// global stats instead of search-filtered stats.
+func TestGetTotalStatsWithSearchQuery(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Without search: 5 messages total
+	allStats := env.MustGetTotalStats(StatsOptions{})
+	if allStats.MessageCount != 5 {
+		t.Fatalf("expected 5 total messages, got %d", allStats.MessageCount)
+	}
+
+	// Search "Hello" matches 2 messages: "Hello World" (id=1, size=1000, no att)
+	// and "Re: Hello" (id=2, size=2000, 2 attachments: 10000+5000 bytes).
+	stats := env.MustGetTotalStats(StatsOptions{SearchQuery: "Hello"})
+
+	if stats.MessageCount != 2 {
+		t.Errorf("SearchQuery=Hello: expected 2 messages, got %d", stats.MessageCount)
+	}
+	expectedSize := int64(1000 + 2000)
+	if stats.TotalSize != expectedSize {
+		t.Errorf("SearchQuery=Hello: expected total size %d, got %d", expectedSize, stats.TotalSize)
+	}
+	if stats.AttachmentCount != 2 {
+		t.Errorf("SearchQuery=Hello: expected 2 attachments, got %d", stats.AttachmentCount)
+	}
+	expectedAttSize := int64(10000 + 5000)
+	if stats.AttachmentSize != expectedAttSize {
+		t.Errorf("SearchQuery=Hello: expected attachment size %d, got %d", expectedAttSize, stats.AttachmentSize)
+	}
+}
+
+// TestGetTotalStatsWithSearchQuery_FromFilter verifies that from: search
+// filters are applied correctly to stats.
+func TestGetTotalStatsWithSearchQuery_FromFilter(t *testing.T) {
+	env := newTestEnv(t)
+
+	// "from:alice" should match 3 messages (ids 1,2,3)
+	stats := env.MustGetTotalStats(StatsOptions{SearchQuery: "from:alice@example.com"})
+
+	if stats.MessageCount != 3 {
+		t.Errorf("SearchQuery=from:alice: expected 3 messages, got %d", stats.MessageCount)
+	}
+	expectedSize := int64(1000 + 2000 + 1500)
+	if stats.TotalSize != expectedSize {
+		t.Errorf("SearchQuery=from:alice: expected total size %d, got %d", expectedSize, stats.TotalSize)
+	}
+}
+
+// TestGetTotalStatsWithSearchQuery_Combined verifies that SearchQuery combines
+// with other StatsOptions filters (e.g., WithAttachmentsOnly).
+func TestGetTotalStatsWithSearchQuery_Combined(t *testing.T) {
+	env := newTestEnv(t)
+
+	// "from:alice" matches 3 messages (ids 1,2,3), but only id=2 has attachments.
+	stats := env.MustGetTotalStats(StatsOptions{
+		SearchQuery:         "from:alice@example.com",
+		WithAttachmentsOnly: true,
+	})
+
+	if stats.MessageCount != 1 {
+		t.Errorf("SearchQuery+WithAttachments: expected 1 message, got %d", stats.MessageCount)
+	}
+	if stats.TotalSize != 2000 {
+		t.Errorf("SearchQuery+WithAttachments: expected total size 2000, got %d", stats.TotalSize)
 	}
 }

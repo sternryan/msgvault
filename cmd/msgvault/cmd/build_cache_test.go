@@ -3,8 +3,10 @@ package cmd
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +92,13 @@ func setupTestSQLite(t *testing.T) (string, func()) {
 			size INTEGER,
 			content_hash TEXT
 		);
+
+		CREATE TABLE conversations (
+			id INTEGER PRIMARY KEY,
+			source_id INTEGER NOT NULL REFERENCES sources(id),
+			source_conversation_id TEXT,
+			title TEXT
+		);
 	`
 
 	if _, err := db.Exec(schema); err != nil {
@@ -160,6 +169,13 @@ func setupTestSQLite(t *testing.T) (string, func()) {
 			(2, 'document.pdf', 'application/pdf', 10000),
 			(2, 'image.png', 'image/png', 5000),
 			(4, 'report.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 20000);
+
+		-- Conversations
+		INSERT INTO conversations (id, source_id, source_conversation_id, title) VALUES
+			(101, 1, 'thread101', 'Hello World Thread'),
+			(102, 1, 'thread102', 'Follow up Thread'),
+			(103, 1, 'thread103', 'Question Thread'),
+			(104, 1, 'thread104', 'Final Thread');
 	`
 
 	if _, err := db.Exec(testData); err != nil {
@@ -204,6 +220,7 @@ func TestBuildCache_BasicExport(t *testing.T) {
 		"labels",
 		"message_labels",
 		"attachments",
+		"conversations",
 	}
 
 	for _, dir := range expectedDirs {
@@ -349,6 +366,9 @@ func TestBuildCache_IncrementalExport(t *testing.T) {
 		INSERT INTO message_labels (message_id, label_id) VALUES
 			(6, 1),
 			(7, 1);
+
+		INSERT INTO attachments (message_id, filename, mime_type, size) VALUES
+			(7, 'notes.txt', 'text/plain', 500);
 	`)
 	db.Close()
 	if err != nil {
@@ -368,6 +388,58 @@ func TestBuildCache_IncrementalExport(t *testing.T) {
 	// Verify total count includes both old and new
 	if result2.ExportedCount != 7 {
 		t.Errorf("after incremental: expected 7 total messages, got %d", result2.ExportedCount)
+	}
+
+	// Verify junction tables accumulated across incremental runs
+	duckdb, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	defer duckdb.Close()
+
+	countRows := func(pattern string) int64 {
+		var count int64
+		// Use forward slashes for DuckDB glob patterns (backslashes fail on Windows)
+		pattern = filepath.ToSlash(pattern)
+		if err := duckdb.QueryRow("SELECT COUNT(*) FROM read_parquet('" + pattern + "')").Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", pattern, err)
+		}
+		return count
+	}
+
+	// Messages: 7 total (5 original + 2 new)
+	if c := countRows(filepath.Join(analyticsDir, "messages", "**", "*.parquet")); c != 7 {
+		t.Errorf("messages: expected 7, got %d", c)
+	}
+
+	// Message recipients: 16 total (12 original + 4 new)
+	if c := countRows(filepath.Join(analyticsDir, "message_recipients", "*.parquet")); c != 16 {
+		t.Errorf("message_recipients: expected 16, got %d", c)
+	}
+
+	// Message labels: 10 total (8 original + 2 new)
+	if c := countRows(filepath.Join(analyticsDir, "message_labels", "*.parquet")); c != 10 {
+		t.Errorf("message_labels: expected 10, got %d", c)
+	}
+
+	// Attachments: 4 total (3 original + 1 new)
+	if c := countRows(filepath.Join(analyticsDir, "attachments", "*.parquet")); c != 4 {
+		t.Errorf("attachments: expected 4, got %d", c)
+	}
+
+	// Participants: 4 (overwritten each run, not appended)
+	if c := countRows(filepath.Join(analyticsDir, "participants", "*.parquet")); c != 4 {
+		t.Errorf("participants: expected 4, got %d", c)
+	}
+
+	// Labels: 3 (overwritten each run)
+	if c := countRows(filepath.Join(analyticsDir, "labels", "*.parquet")); c != 3 {
+		t.Errorf("labels: expected 3, got %d", c)
+	}
+
+	// Sources: 1 (overwritten each run)
+	if c := countRows(filepath.Join(analyticsDir, "sources", "*.parquet")); c != 1 {
+		t.Errorf("sources: expected 1, got %d", c)
 	}
 
 	// Verify sync state was updated
@@ -401,6 +473,321 @@ func TestBuildCache_SkipsWhenNoNewMessages(t *testing.T) {
 
 	if !result.Skipped {
 		t.Error("expected export to be skipped when no new messages")
+	}
+}
+
+// TestBuildCache_BackfillsMissingConversations tests that an older cache missing
+// the conversations parquet table triggers a rebuild even when no new messages
+// exist. This simulates the upgrade path from a cache that predates the
+// conversations export.
+func TestBuildCache_BackfillsMissingConversations(t *testing.T) {
+	tmpDir, cleanup := setupTestSQLite(t)
+	defer cleanup()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	analyticsDir := filepath.Join(tmpDir, "analytics")
+
+	// First export — creates all tables including conversations.
+	result1, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("first buildCache: %v", err)
+	}
+	if result1.Skipped {
+		t.Fatal("expected first export to run")
+	}
+
+	// Simulate a legacy cache by removing the conversations directory.
+	conversationsDir := filepath.Join(analyticsDir, "conversations")
+	if err := os.RemoveAll(conversationsDir); err != nil {
+		t.Fatalf("remove conversations dir: %v", err)
+	}
+
+	// Verify the conversations dir is actually gone.
+	if _, err := os.Stat(conversationsDir); !os.IsNotExist(err) {
+		t.Fatal("expected conversations dir to be removed")
+	}
+
+	// Second export — no new messages, but conversations parquet is missing.
+	// buildCache must NOT skip; it should backfill the missing table.
+	result2, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("second buildCache: %v", err)
+	}
+
+	if result2.Skipped {
+		t.Fatal("expected backfill rebuild when conversations parquet is missing, but was skipped")
+	}
+
+	// Verify conversations parquet was recreated.
+	pattern := filepath.Join(conversationsDir, "*.parquet")
+	matches, _ := filepath.Glob(pattern)
+	if len(matches) == 0 {
+		t.Error("expected conversations parquet files to be recreated after backfill")
+	}
+
+	// Verify conversation data is correct.
+	duckdb, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	defer duckdb.Close()
+
+	var count int64
+	q := "SELECT COUNT(*) FROM read_parquet('" + filepath.Join(conversationsDir, "*.parquet") + "')"
+	if err := duckdb.QueryRow(q).Scan(&count); err != nil {
+		t.Fatalf("count conversations: %v", err)
+	}
+	if count != 4 { // 4 conversations in test data
+		t.Errorf("expected 4 conversations after backfill, got %d", count)
+	}
+
+	// Third export — everything is up-to-date, should skip.
+	result3, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("third buildCache: %v", err)
+	}
+	if !result3.Skipped {
+		t.Error("expected third export to be skipped (all tables present, no new messages)")
+	}
+}
+
+// TestBuildCache_BackfillAfterIncrementalNoDuplicates tests the scenario:
+// full export → add data → incremental export → remove a required table → backfill.
+// This verifies that stale incr_*.parquet shards from prior incremental runs
+// are cleaned up during backfill, preventing duplicate rows.
+func TestBuildCache_BackfillAfterIncrementalNoDuplicates(t *testing.T) {
+	tmpDir, cleanup := setupTestSQLite(t)
+	defer cleanup()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	analyticsDir := filepath.Join(tmpDir, "analytics")
+
+	// Step 1: Initial full export (5 messages, 12 recipients).
+	result1, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("first buildCache: %v", err)
+	}
+	if result1.ExportedCount != 5 {
+		t.Fatalf("expected 5 messages in initial export, got %d", result1.ExportedCount)
+	}
+
+	// Step 2: Add new messages to SQLite, then incremental export.
+	// This creates incr_*.parquet files alongside data.parquet.
+	sqliteDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	_, err = sqliteDB.Exec(`
+		INSERT INTO messages (id, source_id, source_message_id, conversation_id, subject, snippet, sent_at, size_estimate, has_attachments) VALUES
+			(6, 1, 'msg6', 101, 'Incremental 1', 'Preview 6', '2024-03-15 10:00:00', 1200, 0),
+			(7, 1, 'msg7', 102, 'Incremental 2', 'Preview 7', '2024-03-16 11:00:00', 1300, 0);
+		INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
+			(6, 1, 'from', 'Alice Smith'),
+			(6, 2, 'to', 'Bob Jones'),
+			(7, 2, 'from', 'Bob Jones'),
+			(7, 1, 'to', 'Alice Smith');
+		INSERT INTO message_labels (message_id, label_id) VALUES (6, 1), (7, 1);
+	`)
+	sqliteDB.Close()
+	if err != nil {
+		t.Fatalf("insert incremental data: %v", err)
+	}
+
+	result2, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("second buildCache (incremental): %v", err)
+	}
+	if result2.ExportedCount != 7 {
+		t.Fatalf("expected 7 messages after incremental, got %d", result2.ExportedCount)
+	}
+
+	// Step 3: Remove conversations dir (simulate legacy cache missing a table).
+	conversationsDir := filepath.Join(analyticsDir, "conversations")
+	if err := os.RemoveAll(conversationsDir); err != nil {
+		t.Fatalf("remove conversations dir: %v", err)
+	}
+
+	// Step 4: Backfill — no new messages, but conversations is missing.
+	// This must do a full rebuild, clearing stale incremental shards.
+	result3, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("third buildCache (backfill): %v", err)
+	}
+	if result3.Skipped {
+		t.Fatal("expected backfill, but was skipped")
+	}
+
+	// Step 5: Verify exact counts — no duplicates from stale incr_*.parquet.
+	duckdb, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	defer duckdb.Close()
+
+	countRows := func(pattern string) int64 {
+		var count int64
+		pattern = filepath.ToSlash(pattern)
+		if err := duckdb.QueryRow("SELECT COUNT(*) FROM read_parquet('" + pattern + "')").Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", pattern, err)
+		}
+		return count
+	}
+
+	// Expected: 7 messages (5 original + 2 incremental), NOT 12 (5+2+5 from dup)
+	if c := countRows(filepath.Join(analyticsDir, "messages", "**", "*.parquet")); c != 7 {
+		t.Errorf("messages: expected 7, got %d (possible duplicate from stale incremental shards)", c)
+	}
+	// Expected: 16 recipients (12 original + 4 incremental), NOT 28
+	if c := countRows(filepath.Join(analyticsDir, "message_recipients", "*.parquet")); c != 16 {
+		t.Errorf("message_recipients: expected 16, got %d", c)
+	}
+	// Expected: 10 message_labels (8 original + 2 incremental), NOT 18
+	if c := countRows(filepath.Join(analyticsDir, "message_labels", "*.parquet")); c != 10 {
+		t.Errorf("message_labels: expected 10, got %d", c)
+	}
+	// Expected: 3 attachments (no new ones added), NOT 6
+	if c := countRows(filepath.Join(analyticsDir, "attachments", "*.parquet")); c != 3 {
+		t.Errorf("attachments: expected 3, got %d", c)
+	}
+	// Conversations should be restored.
+	if c := countRows(filepath.Join(analyticsDir, "conversations", "*.parquet")); c != 4 {
+		t.Errorf("conversations: expected 4, got %d", c)
+	}
+}
+
+// TestBuildCache_BackfillWithNewMessages tests that when a required table is
+// missing AND new messages exist, the build does a full rebuild (not incremental).
+// Without this, the code would stay in incremental mode and only export new
+// message_recipients, leaving historical rows missing from the rebuilt table.
+func TestBuildCache_BackfillWithNewMessages(t *testing.T) {
+	tmpDir, cleanup := setupTestSQLite(t)
+	defer cleanup()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	analyticsDir := filepath.Join(tmpDir, "analytics")
+
+	// Step 1: Full export (5 messages, 12 recipients).
+	if _, err := buildCache(dbPath, analyticsDir, false); err != nil {
+		t.Fatalf("first buildCache: %v", err)
+	}
+
+	// Step 2: Delete message_recipients dir (simulate missing table).
+	recipientsDir := filepath.Join(analyticsDir, "message_recipients")
+	if err := os.RemoveAll(recipientsDir); err != nil {
+		t.Fatalf("remove message_recipients dir: %v", err)
+	}
+
+	// Step 3: Add new messages to SQLite (so maxID > lastMessageID).
+	sqliteDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	_, err = sqliteDB.Exec(`
+		INSERT INTO messages (id, source_id, source_message_id, conversation_id, subject, snippet, sent_at, size_estimate, has_attachments) VALUES
+			(6, 1, 'msg6', 101, 'New msg', 'Preview 6', '2024-03-15 10:00:00', 1200, 0);
+		INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
+			(6, 1, 'from', 'Alice Smith'),
+			(6, 2, 'to', 'Bob Jones');
+	`)
+	sqliteDB.Close()
+	if err != nil {
+		t.Fatalf("insert new data: %v", err)
+	}
+
+	// Step 4: Build — missing table + new messages should force full rebuild.
+	result, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("second buildCache: %v", err)
+	}
+	if result.Skipped {
+		t.Fatal("expected rebuild, but was skipped")
+	}
+
+	// Step 5: Verify ALL recipients present (12 original + 2 new = 14).
+	// If only incremental ran, we'd see just 2 (new message's recipients).
+	duckdb, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	defer duckdb.Close()
+
+	var count int64
+	q := "SELECT COUNT(*) FROM read_parquet('" + filepath.ToSlash(filepath.Join(recipientsDir, "*.parquet")) + "')"
+	if err := duckdb.QueryRow(q).Scan(&count); err != nil {
+		t.Fatalf("count message_recipients: %v", err)
+	}
+	if count != 14 {
+		t.Errorf("message_recipients: expected 14 (12 original + 2 new), got %d", count)
+	}
+
+	// Also verify messages count is correct (6 total, no duplicates).
+	var msgCount int64
+	msgQ := "SELECT COUNT(*) FROM read_parquet('" + filepath.ToSlash(filepath.Join(analyticsDir, "messages", "**", "*.parquet")) + "', hive_partitioning=true)"
+	if err := duckdb.QueryRow(msgQ).Scan(&msgCount); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if msgCount != 6 {
+		t.Errorf("messages: expected 6, got %d", msgCount)
+	}
+}
+
+// TestBuildCache_BackfillMissingMessages tests that when the messages parquet
+// directory is missing but other parquet tables exist (e.g. participants),
+// the cache is detected as broken and rebuilt. This covers an edge case where
+// HasParquetData (messages-only) would return false, causing missingRequiredParquet
+// to return false and skip the rebuild.
+func TestBuildCache_BackfillMissingMessages(t *testing.T) {
+	tmpDir, cleanup := setupTestSQLite(t)
+	defer cleanup()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	analyticsDir := filepath.Join(tmpDir, "analytics")
+
+	// Step 1: Full export to create all tables.
+	result1, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("first buildCache: %v", err)
+	}
+	if result1.Skipped {
+		t.Fatal("expected first export to run")
+	}
+
+	// Step 2: Remove the messages directory (simulate corruption/partial failure).
+	messagesDir := filepath.Join(analyticsDir, "messages")
+	if err := os.RemoveAll(messagesDir); err != nil {
+		t.Fatalf("remove messages dir: %v", err)
+	}
+
+	// Verify other parquet tables still exist (e.g. participants).
+	participantsPattern := filepath.Join(analyticsDir, "participants", "*.parquet")
+	if matches, _ := filepath.Glob(participantsPattern); len(matches) == 0 {
+		t.Fatal("expected participants parquet to still exist")
+	}
+
+	// Step 3: Build again — messages are missing but other tables exist.
+	// Must detect the broken cache and rebuild, NOT skip.
+	result2, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("second buildCache: %v", err)
+	}
+	if result2.Skipped {
+		t.Fatal("expected rebuild when messages parquet is missing but other tables exist")
+	}
+
+	// Verify messages were restored.
+	duckdb, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	defer duckdb.Close()
+
+	var count int64
+	q := "SELECT COUNT(*) FROM read_parquet('" + filepath.ToSlash(filepath.Join(messagesDir, "**", "*.parquet")) + "', hive_partitioning=true)"
+	if err := duckdb.QueryRow(q).Scan(&count); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if count != 5 {
+		t.Errorf("messages: expected 5, got %d", count)
 	}
 }
 
@@ -747,6 +1134,7 @@ func TestBuildCache_EmptyDatabase(t *testing.T) {
 		CREATE TABLE labels (id INTEGER PRIMARY KEY, name TEXT);
 		CREATE TABLE message_labels (message_id INTEGER, label_id INTEGER);
 		CREATE TABLE attachments (message_id INTEGER, size INTEGER, filename TEXT);
+		CREATE TABLE conversations (id INTEGER PRIMARY KEY, source_conversation_id TEXT);
 	`)
 	db.Close()
 
@@ -758,6 +1146,168 @@ func TestBuildCache_EmptyDatabase(t *testing.T) {
 	// Should be skipped (no messages)
 	if !result.Skipped {
 		t.Error("expected empty database export to be skipped")
+	}
+}
+
+// TestCSVFallbackPath exercises the Windows-style CSV intermediate path:
+// SQLite → CSV → DuckDB views → COPY to Parquet.
+// This runs on all platforms to ensure the fallback logic works correctly.
+func TestCSVFallbackPath(t *testing.T) {
+	tmpDir, cleanup := setupTestSQLite(t)
+	defer cleanup()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	csvDir := filepath.Join(tmpDir, "csv")
+	if err := os.MkdirAll(csvDir, 0755); err != nil {
+		t.Fatalf("create csv dir: %v", err)
+	}
+
+	// 1. Export tables to CSV (same as setupSQLiteSource Windows path)
+	sqliteDB, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+
+	tables := []struct {
+		name          string
+		query         string
+		typeOverrides string
+	}{
+		{"messages", "SELECT id, source_id, source_message_id, conversation_id, subject, snippet, sent_at, size_estimate, has_attachments, deleted_from_source_at FROM messages WHERE sent_at IS NOT NULL",
+			"types={'sent_at': 'TIMESTAMP', 'deleted_from_source_at': 'TIMESTAMP'}"},
+		{"message_recipients", "SELECT message_id, participant_id, recipient_type, display_name FROM message_recipients", ""},
+		{"message_labels", "SELECT message_id, label_id FROM message_labels", ""},
+		{"attachments", "SELECT message_id, size, filename FROM attachments", ""},
+		{"participants", "SELECT id, email_address, domain, display_name FROM participants", ""},
+		{"labels", "SELECT id, name FROM labels", ""},
+		{"sources", "SELECT id, identifier FROM sources", ""},
+		{"conversations", "SELECT id, source_conversation_id FROM conversations", ""},
+	}
+
+	for _, tbl := range tables {
+		csvPath := filepath.Join(csvDir, tbl.name+".csv")
+		if err := exportToCSV(sqliteDB, tbl.query, csvPath); err != nil {
+			sqliteDB.Close()
+			t.Fatalf("exportToCSV %s: %v", tbl.name, err)
+		}
+	}
+	sqliteDB.Close()
+
+	// 2. Open DuckDB and create views (same as setupSQLiteSource)
+	duckDB, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	defer duckDB.Close()
+
+	if _, err := duckDB.Exec("CREATE SCHEMA sqlite_db"); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+
+	for _, tbl := range tables {
+		csvPath := filepath.Join(csvDir, tbl.name+".csv")
+		escaped := strings.ReplaceAll(csvPath, "\\", "/")
+		escaped = strings.ReplaceAll(escaped, "'", "''")
+		csvOpts := "header=true, nullstr='\\N'"
+		if tbl.typeOverrides != "" {
+			csvOpts += ", " + tbl.typeOverrides
+		}
+		viewSQL := fmt.Sprintf(
+			`CREATE VIEW sqlite_db."%s" AS SELECT * FROM read_csv_auto('%s', %s)`,
+			tbl.name, escaped, csvOpts,
+		)
+		if _, err := duckDB.Exec(viewSQL); err != nil {
+			t.Fatalf("create view %s: %v", tbl.name, err)
+		}
+	}
+
+	// 3. Verify sent_at is correctly typed as TIMESTAMP
+	var year int
+	err = duckDB.QueryRow(`SELECT CAST(EXTRACT(YEAR FROM sent_at) AS INTEGER) FROM sqlite_db.messages WHERE id = 1`).Scan(&year)
+	if err != nil {
+		t.Fatalf("EXTRACT(YEAR FROM sent_at) failed — sent_at may not be typed as TIMESTAMP: %v", err)
+	}
+	if year != 2024 {
+		t.Errorf("expected year 2024, got %d", year)
+	}
+
+	// 4. Verify NULLs round-trip correctly (deleted_from_source_at should be NULL)
+	var deletedAt sql.NullTime
+	err = duckDB.QueryRow(`SELECT deleted_from_source_at FROM sqlite_db.messages WHERE id = 1`).Scan(&deletedAt)
+	if err != nil {
+		t.Fatalf("query deleted_from_source_at: %v", err)
+	}
+	if deletedAt.Valid {
+		t.Errorf("expected deleted_from_source_at to be NULL, got %v", deletedAt.Time)
+	}
+
+	// 5. Verify row counts match expectations
+	counts := map[string]int64{
+		"messages":           5,
+		"message_recipients": 12,
+		"message_labels":     8,
+		"attachments":        3,
+		"participants":       4,
+		"labels":             3,
+		"sources":            1,
+		"conversations":      4,
+	}
+	for tbl, expected := range counts {
+		var count int64
+		if err := duckDB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM sqlite_db."%s"`, tbl)).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", tbl, err)
+		}
+		if count != expected {
+			t.Errorf("sqlite_db.%s: expected %d rows, got %d", tbl, expected, count)
+		}
+	}
+
+	// 6. Verify the full buildCache pipeline works via CSV views
+	// Run the same COPY query that buildCache uses for messages
+	analyticsDir := filepath.Join(tmpDir, "analytics")
+	messagesDir := filepath.Join(analyticsDir, "messages")
+	if err := os.MkdirAll(messagesDir, 0755); err != nil {
+		t.Fatalf("create analytics dir: %v", err)
+	}
+	escapedDir := strings.ReplaceAll(messagesDir, "\\", "/")
+	escapedDir = strings.ReplaceAll(escapedDir, "'", "''")
+
+	copySQL := fmt.Sprintf(`
+		COPY (
+			SELECT
+				m.id,
+				m.source_id,
+				m.source_message_id,
+				m.conversation_id,
+				m.subject,
+				m.snippet,
+				m.sent_at,
+				m.size_estimate,
+				m.has_attachments,
+				m.deleted_from_source_at,
+				CAST(EXTRACT(YEAR FROM m.sent_at) AS INTEGER) as year,
+				CAST(EXTRACT(MONTH FROM m.sent_at) AS INTEGER) as month
+			FROM sqlite_db.messages m
+			WHERE m.sent_at IS NOT NULL
+		) TO '%s' (
+			FORMAT PARQUET,
+			PARTITION_BY (year),
+			OVERWRITE_OR_IGNORE,
+			COMPRESSION 'zstd'
+		)
+	`, escapedDir)
+
+	if _, err := duckDB.Exec(copySQL); err != nil {
+		t.Fatalf("COPY messages to Parquet via CSV views failed: %v", err)
+	}
+
+	// Verify Parquet files were created with correct year partitions
+	for _, y := range []string{"2024"} {
+		pattern := filepath.Join(messagesDir, "year="+y, "*.parquet")
+		matches, _ := filepath.Glob(pattern)
+		if len(matches) == 0 {
+			t.Errorf("expected Parquet partition for year=%s", y)
+		}
 	}
 }
 
@@ -784,9 +1334,15 @@ func BenchmarkBuildCache(b *testing.B) {
 		CREATE TABLE labels (id INTEGER PRIMARY KEY, name TEXT);
 		CREATE TABLE message_labels (message_id INTEGER, label_id INTEGER);
 		CREATE TABLE attachments (message_id INTEGER, size INTEGER, filename TEXT);
+		CREATE TABLE conversations (id INTEGER PRIMARY KEY, source_conversation_id TEXT);
 		INSERT INTO sources VALUES (1, 'test@gmail.com');
 		INSERT INTO labels VALUES (1, 'INBOX'), (2, 'Work');
 	`)
+
+	// Insert conversations to match messages
+	for i := 1; i <= 100; i++ {
+		_, _ = db.Exec("INSERT INTO conversations VALUES (?, ?)", i, "thread"+string(rune('0'+i%10)))
+	}
 
 	// Insert 1000 participants
 	for i := 1; i <= 1000; i++ {
@@ -825,6 +1381,366 @@ func BenchmarkBuildCache(b *testing.B) {
 	}
 }
 
+// setupTestSQLiteEmpty creates a test SQLite database with schema and metadata
+// (sources, labels, participants) but zero messages. This simulates a freshly
+// initialized account that has been synced but has no exportable messages.
+func setupTestSQLiteEmpty(t *testing.T) (string, func()) {
+	t.Helper()
+
+	tmpDir, err := os.MkdirTemp("", "msgvault-build-cache-empty-*")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	schema := `
+		CREATE TABLE sources (
+			id INTEGER PRIMARY KEY,
+			source_type TEXT NOT NULL DEFAULT 'gmail',
+			identifier TEXT NOT NULL UNIQUE,
+			display_name TEXT
+		);
+		CREATE TABLE messages (
+			id INTEGER PRIMARY KEY,
+			source_id INTEGER NOT NULL REFERENCES sources(id),
+			source_message_id TEXT NOT NULL,
+			conversation_id INTEGER,
+			subject TEXT,
+			snippet TEXT,
+			sent_at TIMESTAMP,
+			received_at TIMESTAMP,
+			size_estimate INTEGER,
+			has_attachments BOOLEAN DEFAULT FALSE,
+			deleted_from_source_at TIMESTAMP,
+			UNIQUE(source_id, source_message_id)
+		);
+		CREATE TABLE participants (
+			id INTEGER PRIMARY KEY,
+			email_address TEXT NOT NULL UNIQUE,
+			domain TEXT,
+			display_name TEXT
+		);
+		CREATE TABLE message_recipients (
+			id INTEGER PRIMARY KEY,
+			message_id INTEGER NOT NULL REFERENCES messages(id),
+			participant_id INTEGER NOT NULL REFERENCES participants(id),
+			recipient_type TEXT NOT NULL,
+			display_name TEXT
+		);
+		CREATE TABLE labels (
+			id INTEGER PRIMARY KEY,
+			source_id INTEGER NOT NULL REFERENCES sources(id),
+			source_label_id TEXT,
+			name TEXT NOT NULL,
+			label_type TEXT
+		);
+		CREATE TABLE message_labels (
+			message_id INTEGER NOT NULL REFERENCES messages(id),
+			label_id INTEGER NOT NULL REFERENCES labels(id),
+			PRIMARY KEY (message_id, label_id)
+		);
+		CREATE TABLE attachments (
+			id INTEGER PRIMARY KEY,
+			message_id INTEGER NOT NULL REFERENCES messages(id),
+			filename TEXT,
+			mime_type TEXT,
+			size INTEGER,
+			content_hash TEXT
+		);
+		CREATE TABLE conversations (
+			id INTEGER PRIMARY KEY,
+			source_id INTEGER NOT NULL REFERENCES sources(id),
+			source_conversation_id TEXT,
+			title TEXT
+		);
+	`
+	if _, err := db.Exec(schema); err != nil {
+		os.RemoveAll(tmpDir)
+		t.Fatalf("create schema: %v", err)
+	}
+
+	// Insert metadata but NO messages
+	metadata := `
+		INSERT INTO sources (id, identifier, display_name) VALUES (1, 'test@gmail.com', 'Test Account');
+		INSERT INTO participants (id, email_address, domain, display_name) VALUES (1, 'alice@example.com', 'example.com', 'Alice');
+		INSERT INTO labels (id, source_id, name) VALUES (1, 1, 'INBOX');
+	`
+	if _, err := db.Exec(metadata); err != nil {
+		os.RemoveAll(tmpDir)
+		t.Fatalf("insert metadata: %v", err)
+	}
+
+	return tmpDir, func() { os.RemoveAll(tmpDir) }
+}
+
+// TestBuildCache_ZeroMessagesNoRepeatedRebuilds verifies that when the DB has
+// zero messages but metadata parquet exists (sources, labels, etc.), subsequent
+// non-full builds skip correctly and do NOT trigger repeated full rebuilds.
+// Regression test for: zero-message accounts entering a rebuild loop because
+// missingRequiredParquet() sees non-message parquet but missing messages parquet.
+func TestBuildCache_ZeroMessagesNoRepeatedRebuilds(t *testing.T) {
+	tmpDir, cleanup := setupTestSQLiteEmpty(t)
+	defer cleanup()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	analyticsDir := filepath.Join(tmpDir, "analytics")
+
+	// Step 1: Full rebuild to create metadata parquet (sources, labels, etc.).
+	// With zero messages, messages parquet won't be created (no partitions).
+	result1, err := buildCache(dbPath, analyticsDir, true)
+	if err != nil {
+		t.Fatalf("first buildCache (full): %v", err)
+	}
+	if result1.ExportedCount != 0 {
+		t.Errorf("expected 0 exported messages, got %d", result1.ExportedCount)
+	}
+
+	// Step 2: Verify non-message parquet was created.
+	sourcesPattern := filepath.Join(analyticsDir, "sources", "*.parquet")
+	if matches, _ := filepath.Glob(sourcesPattern); len(matches) == 0 {
+		t.Fatal("expected sources parquet to exist after full rebuild")
+	}
+
+	// Step 3: Run non-full build — should skip, NOT trigger another full rebuild.
+	result2, err := buildCache(dbPath, analyticsDir, false)
+	if err != nil {
+		t.Fatalf("second buildCache: %v", err)
+	}
+	if !result2.Skipped {
+		t.Error("expected second build to be skipped (no new messages), but it ran")
+	}
+}
+
+// writeSyncState writes a _last_sync.json file to the analytics directory.
+func writeSyncState(t *testing.T, analyticsDir string, lastMessageID int64) {
+	t.Helper()
+	if err := os.MkdirAll(analyticsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll analytics: %v", err)
+	}
+	state := syncState{LastMessageID: lastMessageID, LastSyncAt: time.Now()}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal sync state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analyticsDir, "_last_sync.json"), data, 0644); err != nil {
+		t.Fatalf("write sync state: %v", err)
+	}
+}
+
+// createFakeParquet creates fake parquet files for all required directories
+// to simulate a complete existing cache.
+func createFakeParquet(t *testing.T, analyticsDir string) {
+	t.Helper()
+	// Messages use hive-partitioned layout
+	msgDir := filepath.Join(analyticsDir, "messages", "year=2024")
+	if err := os.MkdirAll(msgDir, 0755); err != nil {
+		t.Fatalf("MkdirAll messages: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(msgDir, "data.parquet"), []byte("fake"), 0644); err != nil {
+		t.Fatalf("write messages parquet: %v", err)
+	}
+	// Other required tables use flat layout
+	for _, dir := range []string{"sources", "participants", "message_recipients", "labels", "message_labels", "attachments", "conversations"} {
+		d := filepath.Join(analyticsDir, dir)
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "data.parquet"), []byte("fake"), 0644); err != nil {
+			t.Fatalf("write %s parquet: %v", dir, err)
+		}
+	}
+}
+
+func TestCacheNeedsBuild(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, dbPath, analyticsDir string)
+		wantBuild  bool
+		wantReason string
+	}{
+		{
+			name: "ZeroMessages_ZeroState_NoRebuild",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// DB has 0 messages, state says 0 — no rebuild needed
+				writeSyncState(t, analyticsDir, 0)
+			},
+			wantBuild: false,
+		},
+		{
+			name: "NoStateFile_NoParquet_NeedsBuild",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// No _last_sync.json, no parquet files — fresh install
+			},
+			wantBuild:  true,
+			wantReason: "no cache exists",
+		},
+		{
+			name: "NoStateFile_HasParquet_NeedsBuild",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// Parquet exists but no state file — corrupt/legacy state
+				createFakeParquet(t, analyticsDir)
+			},
+			wantBuild:  true,
+			wantReason: "no sync state found",
+		},
+		{
+			name: "NewMessages_NeedsBuild",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// DB has messages beyond what state recorded
+				db, err := sql.Open("sqlite3", dbPath)
+				if err != nil {
+					t.Fatalf("open db: %v", err)
+				}
+				defer db.Close()
+				_, err = db.Exec(`INSERT INTO messages (id, source_id, source_message_id, sent_at) VALUES (10, 1, 'msg10', datetime('now'))`)
+				if err != nil {
+					t.Fatalf("insert message: %v", err)
+				}
+				writeSyncState(t, analyticsDir, 5)
+				createFakeParquet(t, analyticsDir)
+			},
+			wantBuild:  true,
+			wantReason: "5 new messages",
+		},
+		{
+			name: "UpToDate_NoRebuild",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// DB maxID matches state — cache is current
+				db, err := sql.Open("sqlite3", dbPath)
+				if err != nil {
+					t.Fatalf("open db: %v", err)
+				}
+				defer db.Close()
+				_, err = db.Exec(`INSERT INTO messages (id, source_id, source_message_id, sent_at) VALUES (10, 1, 'msg10', datetime('now'))`)
+				if err != nil {
+					t.Fatalf("insert message: %v", err)
+				}
+				writeSyncState(t, analyticsDir, 10)
+				createFakeParquet(t, analyticsDir)
+			},
+			wantBuild: false,
+		},
+		{
+			name: "HasState_EmptyParquetDir_NeedsBuild",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// State file exists, DB has messages, but parquet dir is empty
+				db, err := sql.Open("sqlite3", dbPath)
+				if err != nil {
+					t.Fatalf("open db: %v", err)
+				}
+				defer db.Close()
+				_, err = db.Exec(`INSERT INTO messages (id, source_id, source_message_id, sent_at) VALUES (5, 1, 'msg5', datetime('now'))`)
+				if err != nil {
+					t.Fatalf("insert message: %v", err)
+				}
+				writeSyncState(t, analyticsDir, 5)
+				// No parquet files created — HasParquetData returns false
+			},
+			wantBuild:  true,
+			wantReason: "no cache exists",
+		},
+		{
+			name: "DeletedMessages_Excluded",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// All messages are soft-deleted — maxID should be 0
+				db, err := sql.Open("sqlite3", dbPath)
+				if err != nil {
+					t.Fatalf("open db: %v", err)
+				}
+				defer db.Close()
+				_, err = db.Exec(`INSERT INTO messages (id, source_id, source_message_id, sent_at, deleted_from_source_at) VALUES (10, 1, 'msg10', datetime('now'), datetime('now'))`)
+				if err != nil {
+					t.Fatalf("insert message: %v", err)
+				}
+				writeSyncState(t, analyticsDir, 0)
+			},
+			wantBuild: false,
+		},
+		{
+			name: "InvalidSyncState_NeedsBuild",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// Malformed JSON in _last_sync.json
+				if err := os.MkdirAll(analyticsDir, 0755); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(analyticsDir, "_last_sync.json"), []byte("{corrupt"), 0644); err != nil {
+					t.Fatalf("write state: %v", err)
+				}
+				createFakeParquet(t, analyticsDir)
+			},
+			wantBuild:  true,
+			wantReason: "invalid sync state",
+		},
+		{
+			name: "DBOpenFailure_NeedsBuild",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// Replace DB file with a directory so store.Open fails
+				os.Remove(dbPath)
+				if err := os.MkdirAll(dbPath, 0755); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+				writeSyncState(t, analyticsDir, 5)
+				createFakeParquet(t, analyticsDir)
+			},
+			wantBuild:  true,
+			wantReason: "cannot verify cache status",
+		},
+		{
+			name: "MissingRequiredParquetTables_NeedsBuild",
+			setup: func(t *testing.T, dbPath, analyticsDir string) {
+				// Only messages parquet exists, missing other required tables
+				db, err := sql.Open("sqlite3", dbPath)
+				if err != nil {
+					t.Fatalf("open db: %v", err)
+				}
+				defer db.Close()
+				_, err = db.Exec(`INSERT INTO messages (id, source_id, source_message_id, sent_at) VALUES (5, 1, 'msg5', datetime('now'))`)
+				if err != nil {
+					t.Fatalf("insert message: %v", err)
+				}
+				writeSyncState(t, analyticsDir, 5)
+				// Only create messages parquet — other required dirs missing
+				msgDir := filepath.Join(analyticsDir, "messages", "year=2024")
+				if err := os.MkdirAll(msgDir, 0755); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(msgDir, "data.parquet"), []byte("fake"), 0644); err != nil {
+					t.Fatalf("write parquet: %v", err)
+				}
+			},
+			wantBuild:  true,
+			wantReason: "cache missing required tables",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir, cleanup := setupTestSQLiteEmpty(t)
+			defer cleanup()
+
+			dbPath := filepath.Join(tmpDir, "test.db")
+			analyticsDir := filepath.Join(tmpDir, "analytics")
+
+			tt.setup(t, dbPath, analyticsDir)
+
+			gotBuild, gotReason := cacheNeedsBuild(dbPath, analyticsDir)
+			if gotBuild != tt.wantBuild {
+				t.Errorf("cacheNeedsBuild() build = %v, want %v (reason: %q)", gotBuild, tt.wantBuild, gotReason)
+			}
+			if tt.wantReason != "" && gotReason != tt.wantReason {
+				t.Errorf("cacheNeedsBuild() reason = %q, want %q", gotReason, tt.wantReason)
+			}
+		})
+	}
+}
+
 // BenchmarkBuildCacheIncremental benchmarks incremental export performance.
 func BenchmarkBuildCacheIncremental(b *testing.B) {
 	tmpDir, err := os.MkdirTemp("", "msgvault-bench-incr-*")
@@ -847,11 +1763,17 @@ func BenchmarkBuildCacheIncremental(b *testing.B) {
 		CREATE TABLE labels (id INTEGER PRIMARY KEY, name TEXT);
 		CREATE TABLE message_labels (message_id INTEGER, label_id INTEGER);
 		CREATE TABLE attachments (message_id INTEGER, size INTEGER, filename TEXT);
+		CREATE TABLE conversations (id INTEGER PRIMARY KEY, source_conversation_id TEXT);
 		INSERT INTO sources VALUES (1, 'test@gmail.com');
 		INSERT INTO labels VALUES (1, 'INBOX');
 		INSERT INTO participants VALUES (1, 'alice@example.com', 'example.com', 'Alice');
 		INSERT INTO participants VALUES (2, 'bob@example.com', 'example.com', 'Bob');
 	`)
+
+	// Insert conversations to match messages
+	for i := 1; i <= 100; i++ {
+		_, _ = db.Exec("INSERT INTO conversations VALUES (?, ?)", i, "thread"+string(rune('0'+i%10)))
+	}
 
 	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := 1; i <= 10000; i++ {

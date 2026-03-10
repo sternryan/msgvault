@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"net/textproto"
 	"regexp"
 	"sort"
@@ -283,11 +284,12 @@ func (c *Client) buildIndex() error {
 
 // indexFile reads one MBOX file and appends entries to the index.
 func (c *Client) indexFile(path string, threadMap map[string]string) error {
-	rdr, err := NewReader(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer rdr.Close()
+	defer f.Close()
+	rdr := NewReader(f)
 
 	for {
 		entry, err := rdr.Next()
@@ -367,15 +369,16 @@ func (c *Client) resolveThreads(threadMap map[string]string) {
 
 // readMessageAt reads the full raw message from an MBOX file at the given offset.
 func (c *Client) readMessageAt(path string, offset int64) ([]byte, error) {
-	rdr, err := NewReader(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer rdr.Close()
+	defer f.Close()
 
-	if err := rdr.SeekTo(offset); err != nil {
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return nil, err
 	}
+	rdr := NewReader(f)
 
 	entry, err := rdr.Next()
 	if err != nil {

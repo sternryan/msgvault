@@ -334,8 +334,9 @@ func TestExportAttachments_PartialSuccess(t *testing.T) {
 
 	// Zip file is now written to dataDir/exports/ (configurable output directory).
 
-	// Create a valid attachment file
-	validHash := "abc123def456ghi789"
+	// Create a valid attachment file (must be valid 64-char hex SHA-256 hash)
+	validHash := "abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
+	missingHash := "def456abc123def456abc123def456abc123def456abc123def456abc123def4"
 	attachmentsDir := filepath.Join(env.Dir, "attachments")
 	hashDir := filepath.Join(attachmentsDir, validHash[:2])
 	if err := os.MkdirAll(hashDir, 0o755); err != nil {
@@ -350,7 +351,7 @@ func TestExportAttachments_PartialSuccess(t *testing.T) {
 		Subject: "Test",
 		Attachments: []query.AttachmentInfo{
 			{ID: 1, Filename: "valid.pdf", ContentHash: validHash},
-			{ID: 2, Filename: "missing.pdf", ContentHash: "nonexistent12345"},
+			{ID: 2, Filename: "missing.pdf", ContentHash: missingHash},
 		},
 	}
 	selection := map[int]bool{0: true, 1: true}
@@ -383,8 +384,8 @@ func TestExportAttachments_FullSuccess(t *testing.T) {
 
 	// Zip file is now written to dataDir/exports/ (configurable output directory).
 
-	// Create a valid attachment file
-	validHash := "abc123def456ghi789"
+	// Create a valid attachment file (must be valid 64-char hex SHA-256 hash)
+	validHash := "abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
 	attachmentsDir := filepath.Join(env.Dir, "attachments")
 	hashDir := filepath.Join(attachmentsDir, validHash[:2])
 	if err := os.MkdirAll(hashDir, 0o755); err != nil {

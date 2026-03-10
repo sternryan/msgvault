@@ -3,16 +3,19 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/wesm/msgvault/internal/deletion"
+	"github.com/wesm/msgvault/internal/export"
 	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/search"
 )
@@ -22,6 +25,25 @@ const maxLimit = 1000
 type handlers struct {
 	engine         query.Engine
 	attachmentsDir string
+	dataDir        string
+}
+
+// getAccountID looks up a source ID by email address.
+// Returns nil if account is empty (no filter), or an error if not found.
+func (h *handlers) getAccountID(ctx context.Context, account string) (*int64, error) {
+	if account == "" {
+		return nil, nil
+	}
+	accounts, err := h.engine.ListAccounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list accounts: %w", err)
+	}
+	for _, acc := range accounts {
+		if acc.Identifier == account {
+			return &acc.ID, nil
+		}
+	}
+	return nil, fmt.Errorf("account not found: %s", account)
 }
 
 // getIDArg extracts a required positive integer ID from the arguments map.
@@ -52,14 +74,10 @@ func getDateArg(args map[string]any, key string) (*time.Time, error) {
 // readAttachmentFile reads the content-addressed attachment file after
 // validating the hash and checking size limits.
 func (h *handlers) readAttachmentFile(contentHash string) ([]byte, error) {
-	if contentHash == "" || len(contentHash) < 2 {
-		return nil, fmt.Errorf("attachment has no stored content")
-	}
-	if _, err := hex.DecodeString(contentHash); err != nil {
+	filePath, err := export.StoragePath(h.attachmentsDir, contentHash)
+	if err != nil {
 		return nil, fmt.Errorf("attachment has invalid content hash")
 	}
-
-	filePath := filepath.Join(h.attachmentsDir, contentHash[:2], contentHash)
 
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -97,10 +115,20 @@ func (h *handlers) searchMessages(ctx context.Context, req mcp.CallToolRequest) 
 	limit := limitArg(args, "limit", 20)
 	offset := limitArg(args, "offset", 0)
 
+	// Look up account filter
+	account, _ := args["account"].(string)
+	sourceID, err := h.getAccountID(ctx, account)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	q := search.Parse(queryStr)
+	q.AccountID = sourceID
+
+	filter := query.MessageFilter{SourceID: sourceID}
 
 	// Try fast search first (metadata only), fall back to full FTS.
-	results, err := h.engine.SearchFast(ctx, q, query.MessageFilter{}, limit, offset)
+	results, err := h.engine.SearchFast(ctx, q, filter, limit, offset)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
@@ -154,30 +182,140 @@ func (h *handlers) getAttachment(ctx context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultError("attachments directory not configured"), nil
 	}
 
+	if att.Size > maxAttachmentSize {
+		return mcp.NewToolResultError(fmt.Sprintf("attachment too large: %d bytes (max %d)", att.Size, maxAttachmentSize)), nil
+	}
+
 	data, err := h.readAttachmentFile(att.ContentHash)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	resp := struct {
-		Filename      string `json:"filename"`
-		MimeType      string `json:"mime_type"`
-		Size          int64  `json:"size"`
-		ContentBase64 string `json:"content_base64"`
-	}{
-		Filename:      att.Filename,
-		MimeType:      att.MimeType,
-		Size:          att.Size,
-		ContentBase64: base64.StdEncoding.EncodeToString(data),
+	mimeType := att.MimeType
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
 	}
 
+	metaObj := struct {
+		Filename string `json:"filename"`
+		MimeType string `json:"mime_type"`
+		Size     int64  `json:"size"`
+	}{
+		Filename: att.Filename,
+		MimeType: mimeType,
+		Size:     att.Size,
+	}
+	metaJSON, err := json.Marshal(metaObj)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("marshal metadata: %v", err)), nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			mcp.TextContent{
+				Type: "text",
+				Text: string(metaJSON),
+			},
+			mcp.EmbeddedResource{
+				Type: "resource",
+				Resource: mcp.BlobResourceContents{
+					URI:      fmt.Sprintf("attachment:///%d/%s", att.ID, url.PathEscape(att.Filename)),
+					MIMEType: mimeType,
+					Blob:     base64.StdEncoding.EncodeToString(data),
+				},
+			},
+		},
+	}, nil
+}
+
+func (h *handlers) exportAttachment(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+
+	id, err := getIDArg(args, "attachment_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	att, err := h.engine.GetAttachment(ctx, id)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("get attachment failed: %v", err)), nil
+	}
+	if att == nil {
+		return mcp.NewToolResultError("attachment not found"), nil
+	}
+
+	if h.attachmentsDir == "" {
+		return mcp.NewToolResultError("attachments directory not configured"), nil
+	}
+
+	if att.Size > maxAttachmentSize {
+		return mcp.NewToolResultError(fmt.Sprintf("attachment too large: %d bytes (max %d)", att.Size, maxAttachmentSize)), nil
+	}
+
+	data, err := h.readAttachmentFile(att.ContentHash)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// Determine destination directory.
+	destDir, _ := args["destination"].(string)
+	if destDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("cannot determine home directory: %v", err)), nil
+		}
+		destDir = filepath.Join(home, "Downloads")
+	}
+
+	info, err := os.Stat(destDir)
+	if err != nil || !info.IsDir() {
+		return mcp.NewToolResultError(fmt.Sprintf("destination directory does not exist: %s", destDir)), nil
+	}
+
+	// Sanitize and deduplicate filename.
+	filename := export.SanitizeFilename(filepath.Base(att.Filename))
+	if filename == "" || filename == "." {
+		filename = att.ContentHash
+	}
+	f, outPath, err := export.CreateExclusiveFile(filepath.Join(destDir, filename), 0600)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("write failed: %v", err)), nil
+	}
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		os.Remove(outPath)
+		return mcp.NewToolResultError(fmt.Sprintf("write failed: %v", writeErr)), nil
+	}
+	if closeErr != nil {
+		os.Remove(outPath)
+		return mcp.NewToolResultError(fmt.Sprintf("write failed: %v", closeErr)), nil
+	}
+
+	resp := struct {
+		Path     string `json:"path"`
+		Filename string `json:"filename"`
+		Size     int64  `json:"size"`
+	}{
+		Path:     outPath,
+		Filename: filepath.Base(outPath),
+		Size:     int64(len(data)),
+	}
 	return jsonResult(resp)
 }
 
 func (h *handlers) listMessages(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 
+	// Look up account filter
+	account, _ := args["account"].(string)
+	sourceID, err := h.getAccountID(ctx, account)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	filter := query.MessageFilter{
+		SourceID: sourceID,
 		Pagination: query.Pagination{
 			Limit:  limitArg(args, "limit", 20),
 			Offset: limitArg(args, "offset", 0),
@@ -196,7 +334,6 @@ func (h *handlers) listMessages(ctx context.Context, req mcp.CallToolRequest) (*
 	if v, ok := args["has_attachment"].(bool); ok && v {
 		filter.WithAttachmentsOnly = true
 	}
-	var err error
 	if filter.After, err = getDateArg(args, "after"); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -242,11 +379,18 @@ func (h *handlers) aggregate(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError("group_by parameter is required"), nil
 	}
 
-	opts := query.AggregateOptions{
-		Limit: limitArg(args, "limit", 50),
+	// Look up account filter
+	account, _ := args["account"].(string)
+	sourceID, err := h.getAccountID(ctx, account)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	var err error
+	opts := query.AggregateOptions{
+		SourceID: sourceID,
+		Limit:    limitArg(args, "limit", 50),
+	}
+
 	if opts.After, err = getDateArg(args, "after"); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -298,4 +442,175 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 		return mcp.NewToolResultError(fmt.Sprintf("marshal error: %v", err)), nil
 	}
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+// maxStageDeletionResults limits how many messages can be staged in one call.
+const maxStageDeletionResults = 100000
+
+func (h *handlers) stageDeletion(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+
+	// Look up account filter
+	account, _ := args["account"].(string)
+	sourceID, err := h.getAccountID(ctx, account)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// Check for query vs structured filters
+	queryStr, _ := args["query"].(string)
+	queryStr = strings.TrimSpace(queryStr)
+	hasQuery := queryStr != ""
+
+	// Check for any structured filter
+	fromStr, _ := args["from"].(string)
+	domainStr, _ := args["domain"].(string)
+	labelStr, _ := args["label"].(string)
+	hasAttachment, _ := args["has_attachment"].(bool)
+	afterDate, err := getDateArg(args, "after")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	beforeDate, err := getDateArg(args, "before")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	hasStructuredFilter := fromStr != "" || domainStr != "" || labelStr != "" ||
+		hasAttachment || afterDate != nil || beforeDate != nil
+
+	// Validate: must have either query or structured filters, but not both
+	if hasQuery && hasStructuredFilter {
+		return mcp.NewToolResultError("use either 'query' or structured filters (from, domain, label, etc.), not both"), nil
+	}
+	if !hasQuery && !hasStructuredFilter {
+		return mcp.NewToolResultError("must provide either 'query' or at least one filter (from, domain, label, after, before, has_attachment)"), nil
+	}
+
+	var gmailIDs []string
+	var description string
+
+	if hasQuery {
+		// Query-based search
+		q := search.Parse(queryStr)
+		q.AccountID = sourceID
+
+		// Try fast search first
+		filter := query.MessageFilter{SourceID: sourceID}
+		results, err := h.engine.SearchFast(ctx, q, filter, maxStageDeletionResults, 0)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
+		}
+
+		// Fall back to FTS if no results and query has text terms
+		if len(results) == 0 && len(q.TextTerms) > 0 {
+			results, err = h.engine.Search(ctx, q, maxStageDeletionResults, 0)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
+			}
+		}
+
+		for _, msg := range results {
+			gmailIDs = append(gmailIDs, msg.SourceMessageID)
+		}
+		description = fmt.Sprintf("query: %s", queryStr)
+		if len(description) > 50 {
+			description = description[:50]
+		}
+	} else {
+		// Structured filter
+		filter := query.MessageFilter{
+			SourceID:            sourceID,
+			Sender:              fromStr,
+			Domain:              domainStr,
+			Label:               labelStr,
+			WithAttachmentsOnly: hasAttachment,
+			After:               afterDate,
+			Before:              beforeDate,
+			Pagination: query.Pagination{
+				Limit: maxStageDeletionResults,
+			},
+		}
+
+		var err error
+		gmailIDs, err = h.engine.GetGmailIDsByFilter(ctx, filter)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("filter failed: %v", err)), nil
+		}
+
+		// Build description from filters
+		var parts []string
+		if fromStr != "" {
+			parts = append(parts, fmt.Sprintf("from:%s", fromStr))
+		}
+		if domainStr != "" {
+			parts = append(parts, fmt.Sprintf("domain:%s", domainStr))
+		}
+		if labelStr != "" {
+			parts = append(parts, fmt.Sprintf("label:%s", labelStr))
+		}
+		if hasAttachment {
+			parts = append(parts, "has:attachment")
+		}
+		if afterDate != nil {
+			parts = append(parts, fmt.Sprintf("after:%s", afterDate.Format("2006-01-02")))
+		}
+		if beforeDate != nil {
+			parts = append(parts, fmt.Sprintf("before:%s", beforeDate.Format("2006-01-02")))
+		}
+		description = fmt.Sprintf("filter: %s", strings.Join(parts, " "))
+		if len(description) > 50 {
+			description = description[:50]
+		}
+	}
+
+	if len(gmailIDs) == 0 {
+		return mcp.NewToolResultError("no messages match the specified criteria"), nil
+	}
+
+	// Create deletion manager and manifest
+	deletionsDir := filepath.Join(h.dataDir, "deletions")
+	manager, err := deletion.NewManager(deletionsDir)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("create deletion manager: %v", err)), nil
+	}
+
+	manifest := deletion.NewManifest(description, gmailIDs)
+	manifest.CreatedBy = "mcp"
+
+	// Set filter metadata for execution
+	manifest.Filters.Account = account
+	if fromStr != "" {
+		manifest.Filters.Senders = []string{fromStr}
+	}
+	if domainStr != "" {
+		manifest.Filters.SenderDomains = []string{domainStr}
+	}
+	if labelStr != "" {
+		manifest.Filters.Labels = []string{labelStr}
+	}
+	if afterDate != nil {
+		manifest.Filters.After = afterDate.Format("2006-01-02")
+	}
+	if beforeDate != nil {
+		manifest.Filters.Before = beforeDate.Format("2006-01-02")
+	}
+
+	if err := manager.SaveManifest(manifest); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("save manifest: %v", err)), nil
+	}
+
+	resp := struct {
+		BatchID      string `json:"batch_id"`
+		MessageCount int    `json:"message_count"`
+		Status       string `json:"status"`
+		NextStep     string `json:"next_step"`
+	}{
+		BatchID:      manifest.ID,
+		MessageCount: len(gmailIDs),
+		Status:       string(manifest.Status),
+		NextStep:     "Run 'msgvault delete-staged' to execute deletion, or 'msgvault cancel-deletion " + manifest.ID + "' to cancel",
+	}
+
+	return jsonResult(resp)
 }

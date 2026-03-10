@@ -1,5 +1,11 @@
 # CLAUDE.md
 
+## General Workflow
+
+When a task involves multiple steps (e.g., implement + commit + PR), complete ALL steps in sequence without stopping. If creating a branch, committing, and opening a PR, finish the entire chain.
+
+Always commit after every turn. Don't wait for the user to ask — if you made changes, commit them before responding.
+
 ## Project Overview
 
 msgvault is an offline Gmail archive tool that exports and stores email data locally with full-text search capabilities. The goal is to archive 20+ years of Gmail data from multiple accounts, make it searchable, and eventually delete emails from Gmail once safely archived.
@@ -134,7 +140,7 @@ The TUI uses denormalized Parquet files for fast aggregate queries (~3000x faste
 **Parquet schema:**
 - Denormalized: `from_email`, `from_domain`, `to_emails[]`, `labels[]`, etc.
 - Partitioned by `year` for efficient time-range queries
-- ~3MB for 268k messages (vs ~1GB SQLite with bodies)
+- Compact: small fraction of SQLite size (excludes message bodies)
 
 The TUI automatically builds/updates the Parquet cache on launch when new messages are detected.
 
@@ -165,6 +171,14 @@ The TUI automatically builds/updates the Parquet cache on launch when new messag
 ```
 
 Sync is **read-only** - no modifications to Gmail.
+
+## Go Development
+
+After making any Go code changes, always run `go fmt ./...` and `go vet ./...` before committing. Stage ALL resulting changes, including formatting-only files.
+
+## Git Workflow
+
+When committing changes, always stage ALL modified files (including formatting, generated files, and ancillary changes). Run `git diff` and `git status` before committing to ensure nothing is left unstaged.
 
 ## Code Style & Linting
 

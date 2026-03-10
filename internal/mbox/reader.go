@@ -1,177 +1,275 @@
-// Package mbox provides an MBOX file reader and a gmail.API client for
-// importing Google Takeout email exports into msgvault.
+// Package mbox implements a streaming reader for MBOX files.
+//
+// We support typical mboxo/mboxrd exports where each message is preceded by a
+// Unix "From " separator line. Body lines that begin with "From " (or with one
+// or more leading '>' followed by "From ") are commonly escaped in the file by
+// prefixing an additional '>' (mboxrd). When reading, we unescape by removing a
+// single leading '>' from any line that matches ^>+From . This can mutate
+// literal ">From " lines in pure mboxo exports; call (*Reader).SetUnescapeFrom(false)
+// to disable unescaping if needed.
 package mbox
 
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
-	"os"
-	"regexp"
 )
 
-// fromLineRe matches the MBOX "From " separator line.
-var fromLineRe = regexp.MustCompile(`^From \S+`)
+const maxLineBytes = 32 << 20 // 32 MiB
 
-// escapedFromRe matches mboxrd-escaped ">*From " lines in message bodies.
-var escapedFromRe = regexp.MustCompile(`^>+(From )`)
+var ErrMessageTooLarge = errors.New("mbox message exceeds max size")
 
-// RawEntry represents a single message from an MBOX file.
-type RawEntry struct {
-	Offset int64  // Byte offset in file where this message starts
-	Raw    []byte // Complete raw message bytes (headers + body)
+// Message is a single message from an MBOX file.
+type Message struct {
+	// FromLine is the separator line (without trailing newline).
+	FromLine string
+
+	// Raw is the RFC 5322 message bytes (headers + body). The separator line
+	// is not included. Lines may use either LF or CRLF endings depending on
+	// the source file.
+	Raw []byte
+
+	// Offset is the byte offset of this message's "From " line in the file.
+	Offset int64
 }
 
-// Reader reads messages from an MBOX file.
+type offsetReader struct {
+	r io.Reader
+	n int64
+}
+
+func (o *offsetReader) Read(p []byte) (int, error) {
+	n, err := o.r.Read(p)
+	o.n += int64(n)
+	return n, err
+}
+
+// Reader reads messages from an MBOX stream.
+// It is safe for large files: it reads one message at a time.
 type Reader struct {
-	file   *os.File
-	reader *bufio.Reader
-	offset int64
-	// pending holds the next "From " line already read by the previous Next() call.
-	pending []byte
+	or *offsetReader
+	br *bufio.Reader
+
+	// nextFromLine is the already-read separator line for the next message, if any.
+	nextFromLine   string
+	nextFromOffset int64
+	hasNextFrom    bool
+	eof            bool
+
+	maxMessageBytes int64
+	unescapeFrom    bool
 }
 
-// NewReader opens an MBOX file for reading.
-func NewReader(path string) (*Reader, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open mbox: %w", err)
+// NewReader creates a new MBOX reader.
+func NewReader(r io.Reader) *Reader {
+	or := &offsetReader{r: r}
+	// If the underlying reader is seekable (e.g. *os.File), initialize the counter
+	// from the current position so offsets remain absolute after a prior Seek().
+	if s, ok := r.(io.Seeker); ok {
+		if off, err := s.Seek(0, io.SeekCurrent); err == nil {
+			or.n = off
+		}
 	}
 	return &Reader{
-		file:   f,
-		reader: bufio.NewReaderSize(f, 256*1024),
-		offset: 0,
-	}, nil
-}
-
-// SeekTo positions the reader at the given byte offset for resumption.
-func (r *Reader) SeekTo(offset int64) error {
-	if _, err := r.file.Seek(offset, io.SeekStart); err != nil {
-		return fmt.Errorf("seek mbox: %w", err)
+		or:           or,
+		br:           bufio.NewReader(or),
+		unescapeFrom: true,
 	}
-	r.reader.Reset(r.file)
-	r.offset = offset
-	r.pending = nil
-	return nil
 }
 
-// Next returns the next message, or io.EOF when done.
-func (r *Reader) Next() (*RawEntry, error) {
-	// Find the "From " line that starts this message.
-	var fromLine []byte
-	if r.pending != nil {
-		fromLine = r.pending
-		r.pending = nil
-	} else {
+// NewReaderWithMaxMessageBytes creates a new MBOX reader that rejects messages
+// larger than maxMessageBytes. If maxMessageBytes <= 0, no limit is enforced.
+func NewReaderWithMaxMessageBytes(r io.Reader, maxMessageBytes int64) *Reader {
+	rd := NewReader(r)
+	rd.maxMessageBytes = maxMessageBytes
+	return rd
+}
+
+// SetUnescapeFrom controls whether the reader performs mboxrd-style unescaping
+// of ^>+From  lines. The default is true.
+func (r *Reader) SetUnescapeFrom(enabled bool) {
+	r.unescapeFrom = enabled
+}
+
+// Offset reports the current logical read offset (bytes consumed) within the
+// underlying stream, accounting for buffered data.
+func (r *Reader) Offset() int64 {
+	return r.or.n - int64(r.br.Buffered())
+}
+
+// NextFromOffset reports the stream offset of the next message's "From " line.
+// Valid only after a successful Next() call (or Offset() at end-of-file).
+func (r *Reader) NextFromOffset() int64 {
+	if r.hasNextFrom {
+		return r.nextFromOffset
+	}
+	// If there is no buffered "From " line, the next message would start at the
+	// current offset (either EOF or we haven't found the first separator yet).
+	return r.Offset()
+}
+
+// Next returns the next message from the MBOX stream.
+// Returns io.EOF when there are no more messages.
+func (r *Reader) Next() (*Message, error) {
+	if r.eof {
+		return nil, io.EOF
+	}
+
+	// Find the separator line for the next message, if we don't already have it.
+	if !r.hasNextFrom {
 		for {
-			line, err := r.readLine()
-			if err != nil {
-				return nil, err // io.EOF or real error
+			lineStart := r.Offset()
+			line, err := r.readLineBytes()
+			if err != nil && err != io.EOF {
+				return nil, err
 			}
-			if isFromLine(line) {
-				fromLine = line
+			if isFromSeparatorLine(line) {
+				r.nextFromLine = string(bytes.TrimRight(line, "\r\n"))
+				r.nextFromOffset = lineStart
+				r.hasNextFrom = true
 				break
 			}
-			// Skip blank lines between messages or before the first message.
+			if err == io.EOF {
+				r.eof = true
+				return nil, io.EOF
+			}
 		}
 	}
 
-	// Record the offset where this message's "From " line begins.
-	// The offset was advanced past the "From " line already, so we
-	// compute the start as current offset minus the line length.
-	entryOffset := r.offset - int64(len(fromLine))
+	// Consume the next separator and start collecting this message.
+	fromLine := r.nextFromLine
+	r.hasNextFrom = false
 
-	// Read lines until the next "From " separator or EOF.
-	var buf bytes.Buffer
+	var raw bytes.Buffer
+	var rawBytes int64
+	tooLarge := false
+
 	for {
-		line, err := r.readLine()
-		if err == io.EOF {
-			// End of file — flush current message.
-			break
+		lineStart := r.Offset()
+		line, err := r.readLineBytes()
+		if len(line) > 0 {
+			if isFromSeparatorLine(line) {
+				// Found the next message separator; stash it for the next call.
+				r.nextFromLine = string(bytes.TrimRight(line, "\r\n"))
+				r.nextFromOffset = lineStart
+				r.hasNextFrom = true
+				break
+			}
+
+			if !tooLarge {
+				b := line
+				if r.unescapeFrom {
+					b = unescapeFromBytes(line)
+				}
+				if r.maxMessageBytes > 0 && rawBytes+int64(len(b)) > r.maxMessageBytes {
+					tooLarge = true
+				} else {
+					raw.Write(b)
+					rawBytes += int64(len(b))
+				}
+			}
 		}
+
 		if err != nil {
+			if err == io.EOF {
+				r.eof = true
+				break
+			}
 			return nil, err
 		}
-		if isFromLine(line) {
-			// This line belongs to the next message.
-			r.pending = line
-			break
-		}
-		// Unescape mboxrd: remove one leading '>' from lines like ">From ", ">>From ", etc.
-		line = unescapeFromLine(line)
-		buf.Write(line)
 	}
 
-	raw := buf.Bytes()
-	// Trim trailing blank lines from the message body.
-	raw = bytes.TrimRight(raw, "\r\n")
-	if len(raw) > 0 {
-		raw = append(raw, '\n')
+	if tooLarge {
+		return nil, fmt.Errorf("%w: limit %d bytes", ErrMessageTooLarge, r.maxMessageBytes)
 	}
 
-	return &RawEntry{
-		Offset: entryOffset,
-		Raw:    raw,
+	// Empty message bodies are unusual but possible; return them anyway.
+	return &Message{
+		FromLine: fromLine,
+		Raw:      raw.Bytes(),
+		Offset:   r.nextFromOffset,
 	}, nil
 }
 
-// Close closes the underlying file.
-func (r *Reader) Close() error {
-	return r.file.Close()
-}
-
-// CountMessages counts messages in an MBOX file by counting "From " separator lines.
-func CountMessages(path string) (int64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, fmt.Errorf("open mbox: %w", err)
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 1024*1024)
-	var count int64
-	for scanner.Scan() {
-		if isFromLine(scanner.Bytes()) {
-			count++
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return 0, fmt.Errorf("scan mbox: %w", err)
-	}
-	return count, nil
-}
-
-// readLine reads a full line including the newline character(s) and updates the offset.
-func (r *Reader) readLine() ([]byte, error) {
-	var full []byte
+func (r *Reader) readLineBytes() ([]byte, error) {
+	// ReadBytes returns bufio.ErrBufferFull when the buffer fills before finding
+	// the delimiter. Treat that as a partial line and keep accumulating.
+	var out []byte
 	for {
-		line, isPrefix, err := r.reader.ReadLine()
-		if err != nil {
-			return nil, err
+		b, err := r.br.ReadBytes('\n')
+		out = append(out, b...)
+		if len(out) > maxLineBytes {
+			return nil, fmt.Errorf("mbox line exceeds max length (%d bytes)", maxLineBytes)
 		}
-		full = append(full, line...)
-		if !isPrefix {
-			break
+		if err == nil {
+			return out, nil
 		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if err == io.EOF {
+			return out, io.EOF
+		}
+		if len(out) > 0 {
+			return out, err
+		}
+		return nil, err
 	}
-	// Append newline since ReadLine strips it.
-	full = append(full, '\n')
-	r.offset += int64(len(full))
-	return full, nil
 }
 
-// isFromLine checks if a line is an mbox "From " separator.
-func isFromLine(line []byte) bool {
-	return fromLineRe.Match(line)
+var fromPrefix = []byte("From ")
+
+// isFromSeparatorLine checks whether line (with or without trailing newline)
+// looks like an mbox "From " separator. Works for both string and []byte
+// callers by accepting []byte and converting only the trimmed portion.
+func isFromSeparatorLine(line []byte) bool {
+	if !bytes.HasPrefix(line, fromPrefix) {
+		return false
+	}
+	trimmed := string(bytes.TrimRight(line, "\r\n"))
+	_, ok := ParseFromSeparatorDate(trimmed)
+	return ok
 }
 
-// unescapeFromLine removes one leading '>' from mboxrd-escaped "From " lines.
-// A line like ">From " becomes "From ", ">>From " becomes ">From ", etc.
-func unescapeFromLine(line []byte) []byte {
-	if len(line) > 1 && line[0] == '>' && escapedFromRe.Match(line) {
+// unescapeFromBytes removes a single leading '>' from any line that matches
+// ^>+From  (mboxrd unquoting). This also works for mboxo where only ">From "
+// appears for originally "From " lines.
+func unescapeFromBytes(line []byte) []byte {
+	if len(line) == 0 || line[0] != '>' {
+		return line
+	}
+
+	// Count leading '>' characters.
+	i := 0
+	for i < len(line) && line[i] == '>' {
+		i++
+	}
+	// Check if the remainder begins with "From ".
+	if i < len(line) && bytes.HasPrefix(line[i:], []byte("From ")) {
 		return line[1:]
 	}
 	return line
+}
+
+// Validate scans the stream and returns an error if it doesn't look like an MBOX file.
+// It reads up to maxBytes from the stream. This is a heuristic.
+func Validate(r io.Reader, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return fmt.Errorf("maxBytes must be > 0")
+	}
+	br := bufio.NewReader(io.LimitReader(r, maxBytes))
+	for {
+		line, err := br.ReadString('\n')
+		if isFromSeparatorLine([]byte(line)) {
+			return nil
+		}
+		if err != nil {
+			if err == io.EOF {
+				return fmt.Errorf("no \"From \" separators found (not an mbox file?)")
+			}
+			return err
+		}
+	}
 }

@@ -15,6 +15,7 @@ import (
 
 var forceSQL bool
 var skipCacheBuild bool
+var noSQLiteScanner bool
 
 var tuiCmd = &cobra.Command{
 	Use:   "tui",
@@ -50,14 +51,70 @@ Performance:
   aggregation queries. Run 'msgvault-sync build-parquet' to generate them.
   Use --force-sql to bypass Parquet and query SQLite directly (slow).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Open database
 		dbPath := cfg.DatabaseDSN()
+		s, err := store.Open(dbPath)
+		if err != nil {
+			return fmt.Errorf("open database: %w", err)
+		}
+		defer s.Close()
+
+		// Ensure schema is up to date
+		if err := s.InitSchema(); err != nil {
+			return fmt.Errorf("init schema: %w", err)
+		}
+
+		// Build FTS index in background — TUI uses DuckDB/Parquet for
+		// aggregates and only needs FTS for deep search (Tab to switch).
+		if s.NeedsFTSBackfill() {
+			go func() {
+				_, _ = s.BackfillFTS(nil)
+			}()
+		}
+
 		analyticsDir := cfg.AnalyticsDir()
 
-		_, engine, cleanup, err := initQueryEngine(dbPath, analyticsDir, forceSQL, skipCacheBuild)
-		if err != nil {
-			return err
+		// Check if cache needs to be built/updated (unless forcing SQL or skipping)
+		if !forceSQL && !skipCacheBuild {
+			needsBuild, reason := cacheNeedsBuild(dbPath, analyticsDir)
+			if needsBuild {
+				fmt.Printf("Building analytics cache (%s)...\n", reason)
+				result, err := buildCache(dbPath, analyticsDir, true)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Failed to build cache: %v\n", err)
+					fmt.Fprintf(os.Stderr, "Falling back to SQLite (may be slow for large archives)\n")
+				} else if !result.Skipped {
+					fmt.Printf("Cached %d messages for fast queries.\n", result.ExportedCount)
+				}
+			}
 		}
-		defer cleanup()
+
+		// Determine query engine to use
+		var engine query.Engine
+
+		if !forceSQL && query.HasCompleteParquetData(analyticsDir) {
+			// Use DuckDB for fast Parquet queries
+			var duckOpts query.DuckDBOptions
+			if noSQLiteScanner {
+				duckOpts.DisableSQLiteScanner = true
+			}
+			duckEngine, err := query.NewDuckDBEngine(analyticsDir, dbPath, s.DB(), duckOpts)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to open Parquet engine: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Falling back to SQLite (may be slow for large archives)\n")
+				engine = query.NewSQLiteEngine(s.DB())
+			} else {
+				engine = duckEngine
+				defer duckEngine.Close()
+			}
+		} else {
+			// Use SQLite directly
+			if !forceSQL {
+				fmt.Fprintf(os.Stderr, "Note: No cache data available, using SQLite (slow for large archives)\n")
+				fmt.Fprintf(os.Stderr, "Run 'msgvault build-cache' to enable fast queries.\n")
+			}
+			engine = query.NewSQLiteEngine(s.DB())
+		}
 
 		// Create and run TUI
 		model := tui.New(engine, tui.Options{DataDir: cfg.Data.DataDir, Version: Version})
@@ -77,14 +134,14 @@ func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
 	messagesDir := filepath.Join(analyticsDir, "messages")
 	stateFile := filepath.Join(analyticsDir, "_last_sync.json")
 
-	// Check if cache directory exists with parquet files
-	if !query.HasParquetData(analyticsDir) {
-		return true, "no cache exists"
-	}
+	hasParquetData := query.HasParquetData(analyticsDir)
 
 	// Load last sync state
 	data, err := os.ReadFile(stateFile)
 	if err != nil {
+		if !hasParquetData {
+			return true, "no cache exists"
+		}
 		return true, "no sync state found"
 	}
 
@@ -95,7 +152,7 @@ func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
 
 	// Check if SQLite has newer messages
 	// We need to query SQLite directly to check max message ID
-	db, err := store.Open(dbPath, store.WithPassphrase(passphrase))
+	db, err := store.Open(dbPath)
 	if err != nil {
 		// Can't open DB to check - force rebuild to be safe
 		return true, "cannot verify cache status"
@@ -112,6 +169,17 @@ func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
 		return true, "cannot verify cache status"
 	}
 
+	// Zero-message accounts never produce message parquet files, so
+	// HasParquetData returns false even after a successful cache build.
+	// If sync state and DB both agree there are 0 messages, no build needed.
+	if maxID == 0 && state.LastMessageID == 0 {
+		return false, ""
+	}
+
+	if !hasParquetData {
+		return true, "no cache exists"
+	}
+
 	if maxID > state.LastMessageID {
 		newCount := maxID - state.LastMessageID
 		return true, fmt.Sprintf("%d new messages", newCount)
@@ -123,6 +191,11 @@ func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
 		return true, "cache directory empty"
 	}
 
+	// Check for required parquet tables (e.g. conversations added in a newer version)
+	if missingRequiredParquet(analyticsDir) {
+		return true, "cache missing required tables"
+	}
+
 	return false, ""
 }
 
@@ -130,4 +203,6 @@ func init() {
 	rootCmd.AddCommand(tuiCmd)
 	tuiCmd.Flags().BoolVar(&forceSQL, "force-sql", false, "Force SQLite queries instead of Parquet (slow for large archives)")
 	tuiCmd.Flags().BoolVar(&skipCacheBuild, "no-cache-build", false, "Skip automatic cache build/update")
+	tuiCmd.Flags().BoolVar(&noSQLiteScanner, "no-sqlite-scanner", false, "Disable DuckDB sqlite_scanner extension (use direct SQLite fallback)")
+	_ = tuiCmd.Flags().MarkHidden("no-sqlite-scanner")
 }
