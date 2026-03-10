@@ -1,0 +1,113 @@
+# Requirements: msgvault v1.1
+
+**Defined:** 2026-03-10
+**Core Value:** Users can safely archive their entire Gmail history offline and search it instantly, with confidence that nothing is lost before deletion.
+
+## v1.1 Requirements
+
+Requirements for the Web UI rebuild. Each maps to roadmap phases.
+
+### Foundation
+
+- [ ] **FOUND-01**: User can access the web UI from a single `go build` binary with no npm/Node.js dependency
+- [ ] **FOUND-02**: Web UI serves all pages via server-rendered Templ + HTMX (adopted from upstream PR #176)
+- [ ] **FOUND-03**: React SPA (`web/`), JSON API server (`internal/api/`), and all npm/Vite tooling are removed
+- [ ] **FOUND-04**: All static assets (HTMX, CSS, JS) are embedded via `go:embed` in the binary
+- [ ] **FOUND-05**: Generated `_templ.go` files are committed so `go build` works without the `templ` CLI installed
+
+### Web UI Parity
+
+- [ ] **PARITY-01**: User can view dashboard with archive stats overview and time series chart
+- [ ] **PARITY-02**: User can browse aggregates with drill-down across all 7 view types (Senders, Sender Names, Recipients, Recipient Names, Domains, Labels, Time)
+- [ ] **PARITY-03**: User can view paginated message list with sort and filter
+- [ ] **PARITY-04**: User can search messages with full-text search (debounced input)
+- [ ] **PARITY-05**: User can view message detail with headers, body, and attachments
+- [ ] **PARITY-06**: User can stage messages for deletion and manage staged deletions
+- [ ] **PARITY-07**: User can navigate the web UI with Vim-style keyboard shortcuts
+- [ ] **PARITY-08**: User can filter all views by account (multi-account support)
+
+### Email Rendering
+
+- [ ] **RENDER-01**: Email HTML bodies are sanitized server-side with bluemonday before rendering (XSS prevention)
+- [ ] **RENDER-02**: Email HTML bodies render in sandboxed iframes so email CSS cannot break application layout
+- [ ] **RENDER-03**: CID image references in emails are substituted with local attachment URLs server-side
+- [ ] **RENDER-04**: External images in emails are blocked by default with an opt-in toggle to load them
+
+### Thread View
+
+- [ ] **THREAD-01**: User can view all messages in a conversation chronologically on a single page
+- [ ] **THREAD-02**: Thread messages are collapsible via native HTML `<details>`, with the latest message pre-expanded
+- [ ] **THREAD-03**: Inline images render directly in thread messages, other attachments as download links
+- [ ] **THREAD-04**: User can navigate to thread view from message detail via link and `t` keyboard shortcut
+- [ ] **THREAD-05**: User can scroll between thread messages with `n`/`p` keyboard shortcuts
+
+### Polish
+
+- [ ] **POLISH-01**: User can toggle between plain text and HTML rendering per message
+- [ ] **POLISH-02**: Dashboard displays time-series data as a CSS bar chart (no JS charting library)
+- [ ] **POLISH-03**: Loading indicators display during HTMX partial page updates
+
+## v2 Requirements
+
+Deferred to future release. Tracked but not in current roadmap.
+
+### API
+
+- **API-01**: JSON API for programmatic access (needed for MCP integration or mobile client)
+
+### Security
+
+- **SEC-01**: App-level encryption for database and attachments at rest
+
+### Visualization
+
+- **VIS-01**: Server-side SVG time-series charts for dashboard (upgrade from CSS bar chart)
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Mobile app | Desktop/CLI tool, not a mobile use case |
+| Gmail modification during sync | Sync is read-only by design |
+| Infinite scroll | Breaks back button with HTMX; offset pagination is correct for archive browsing |
+| Session-based auth | Personal local tool; no multi-user auth needed |
+| Real-time updates / WebSocket | Archive is static data; request-response is sufficient |
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| FOUND-01 | — | Pending |
+| FOUND-02 | — | Pending |
+| FOUND-03 | — | Pending |
+| FOUND-04 | — | Pending |
+| FOUND-05 | — | Pending |
+| PARITY-01 | — | Pending |
+| PARITY-02 | — | Pending |
+| PARITY-03 | — | Pending |
+| PARITY-04 | — | Pending |
+| PARITY-05 | — | Pending |
+| PARITY-06 | — | Pending |
+| PARITY-07 | — | Pending |
+| PARITY-08 | — | Pending |
+| RENDER-01 | — | Pending |
+| RENDER-02 | — | Pending |
+| RENDER-03 | — | Pending |
+| RENDER-04 | — | Pending |
+| THREAD-01 | — | Pending |
+| THREAD-02 | — | Pending |
+| THREAD-03 | — | Pending |
+| THREAD-04 | — | Pending |
+| THREAD-05 | — | Pending |
+| POLISH-01 | — | Pending |
+| POLISH-02 | — | Pending |
+| POLISH-03 | — | Pending |
+
+**Coverage:**
+- v1.1 requirements: 25 total
+- Mapped to phases: 0
+- Unmapped: 25
+
+---
+*Requirements defined: 2026-03-10*
+*Last updated: 2026-03-10 after initial definition*
