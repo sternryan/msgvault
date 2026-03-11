@@ -119,13 +119,15 @@ Plans:
   3. `go mod tidy` produces no changes (bluemonday correctly classified)
   4. 09-02-SUMMARY.md frontmatter includes POLISH-03 in `requirements_completed`
   5. `go test ./internal/web/...` passes with no failures
+**Plans:** 1 plan
 
-Plans: (to be planned)
+Plans:
+- [ ] 11-01-PLAN.md — Fix keys.js selectors (data-row to data-href, sort-header to sortable-header), add data-sort-field + active class to SortHeader, go mod tidy, SUMMARY frontmatter fix
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
+Phases execute in numeric order: 6 → 7 → 8 → 9 → 10 → 11
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -135,4 +137,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 8. Thread View | 2/2 | Complete   | 2026-03-11 | - |
 | 9. Polish | 2/2 | Complete   | 2026-03-11 | - |
 | 10. Integration Test & DOM Cleanup | 1/1 | Complete    | 2026-03-11 | - |
-| 11. Keyboard Selector Fix & Cleanup | 0/0 | Not Started | - | - |
+| 11. Keyboard Selector Fix & Cleanup | 0/1 | Not Started | - | - |
