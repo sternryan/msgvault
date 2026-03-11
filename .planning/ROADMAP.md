@@ -26,7 +26,7 @@ Phases 1-5 delivered the complete offline Gmail archiver: full/incremental sync,
 - [x] **Phase 7: Email Rendering** - Sanitize and sandbox HTML email bodies; serve inline attachments with CID substitution and external image blocking (completed 2026-03-11)
 - [x] **Phase 8: Thread View** - Full conversation view with collapsible messages, inline images, and keyboard navigation (completed 2026-03-11)
 - [x] **Phase 9: Polish** - Text/HTML toggle, loading indicators, CSS bar chart for dashboard, and final validation pass (completed 2026-03-11)
-- [ ] **Phase 10: Integration Test & DOM Cleanup** - Fix stale test assertions and duplicate DOM IDs from cross-phase integration
+- [x] **Phase 10: Integration Test & DOM Cleanup** - Fix stale test assertions and duplicate DOM IDs from cross-phase integration (completed 2026-03-11)
 
 ## Phase Details
 
@@ -102,7 +102,7 @@ Plans:
   1. `TestMessageBodyWrapperEndpoint` passes with assertions matching Phase 9's unified toolbar (`email-toolbar`, `closest .email-render-wrapper`)
   2. Thread view lazy-loaded messages use unique IDs (e.g., `email-body-wrapper-{messageID}`) instead of duplicate `id=email-body-wrapper`
   3. `go test ./internal/web/...` passes with no test failures
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [ ] 10-01-PLAN.md — Fix stale test assertions (INT-01) and duplicate DOM IDs in thread lazy-load (INT-02)
@@ -119,4 +119,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 7. Email Rendering | 2/2 | Complete   | 2026-03-11 | - |
 | 8. Thread View | 2/2 | Complete   | 2026-03-11 | - |
 | 9. Polish | 2/2 | Complete   | 2026-03-11 | - |
-| 10. Integration Test & DOM Cleanup | 0/1 | Pending | - | - |
+| 10. Integration Test & DOM Cleanup | 1/1 | Complete   | 2026-03-11 | - |

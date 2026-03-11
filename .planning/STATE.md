@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Completed 09-02-PLAN.md
-last_updated: "2026-03-11T17:02:07.204Z"
+stopped_at: Completed 10-01-PLAN.md
+last_updated: "2026-03-11T18:33:08.344Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 11
-  completed_plans: 11
+  total_phases: 5
+  completed_phases: 5
+  total_plans: 12
+  completed_plans: 12
   percent: 20
 ---
 
@@ -57,6 +57,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 | Phase 08-thread-view P02 | 4min | 2 tasks | 4 files |
 | Phase 09-polish P01 | 3min | 2 tasks | 10 files |
 | Phase 09-polish P02 | 5min | 2 tasks | 10 files |
+| Phase 10-integration-cleanup P01 | 5min | 2 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -96,6 +97,8 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Phase 09-polish]: Universal #page-indicator for all #main-content swaps — simpler and consistent vs per-trigger indicators
 - [Phase 09-polish]: Specialized #filter-indicator and #stage-indicator for aggregate filter and staging form for contextual UX
 - [Phase 09-polish]: .page-indicator-bar uses height:0 + overflow:visible so indicator consumes no layout space
+- [Phase 10-integration-cleanup]: wrapperID defaults to email-body-wrapper when absent — preserves backward compatibility for message detail page
+- [Phase 10-integration-cleanup]: Thread lazy-load passes wrapperID=email-body-wrapper-{msgID} to match eager-rendered card pattern for DOM symmetry
 
 ### Pending Todos
 
@@ -110,6 +113,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T16:59:38.002Z
-Stopped at: Completed 09-02-PLAN.md
+Last session: 2026-03-11T18:33:08.342Z
+Stopped at: Completed 10-01-PLAN.md
 Resume file: None
