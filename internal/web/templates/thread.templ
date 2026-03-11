@@ -1,0 +1,160 @@
+package templates
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/wesm/msgvault/internal/query"
+)
+
+// displayName returns the sender's display name, falling back to email.
+func displayName(msg query.MessageSummary) string {
+	if msg.FromName != "" {
+		return msg.FromName
+	}
+	return msg.FromEmail
+}
+
+// participantSummary formats a list of participant names into a readable summary.
+// Shows first 2 names; if more exist, appends "and N others".
+func participantSummary(participants []string) string {
+	switch len(participants) {
+	case 0:
+		return "Unknown"
+	case 1:
+		return participants[0]
+	case 2:
+		return participants[0] + " and " + participants[1]
+	default:
+		others := len(participants) - 2
+		return fmt.Sprintf("%s, %s and %d others", participants[0], participants[1], others)
+	}
+}
+
+// threadDateRange formats a date range for thread header display.
+func threadDateRange(first, last time.Time) string {
+	if first.Year() == last.Year() {
+		if first.Month() == last.Month() {
+			return first.Format("Jan 2006")
+		}
+		return fmt.Sprintf("%s - %s", first.Format("Jan"), last.Format("Jan 2006"))
+	}
+	return fmt.Sprintf("%s - %s", first.Format("Jan 2006"), last.Format("Jan 2006"))
+}
+
+// ThreadPage renders the full thread view for a conversation.
+templ ThreadPage(messages []query.MessageSummary, highlightID int64, subject string, participants []string, firstDate time.Time, lastDate time.Time, messageCount int) {
+	<div class="page-content">
+		<a
+			class="back-link"
+			href="/messages"
+			hx-get="/messages"
+			hx-select="#main-content"
+			hx-target="#main-content"
+			hx-swap="outerHTML"
+			hx-replace-url="true"
+		>&larr; Back to messages</a>
+		<div class="thread-view">
+			<div class="thread-header">
+				<h2 class="thread-subject">{ subject }</h2>
+				<p class="thread-participants">Between { participantSummary(participants) }</p>
+				<p class="thread-meta">{ fmt.Sprintf("%d", messageCount) } { Pluralize(int64(messageCount), "message", "messages") } &middot; { threadDateRange(firstDate, lastDate) }</p>
+			</div>
+			if highlightID > 0 {
+				<div id="thread-container" data-highlight={ fmt.Sprintf("%d", highlightID) }>
+					for i, msg := range messages {
+						@ThreadMessageCard(msg, i == len(messages)-1, highlightID)
+					}
+				</div>
+			} else {
+				<div id="thread-container">
+					for i, msg := range messages {
+						@ThreadMessageCard(msg, i == len(messages)-1, highlightID)
+					}
+				</div>
+			}
+		</div>
+	</div>
+}
+
+// ThreadMessageCard renders a single collapsible message in a thread.
+templ ThreadMessageCard(msg query.MessageSummary, isLatest bool, highlightID int64) {
+	if isLatest || msg.ID == highlightID {
+		<details
+			id={ fmt.Sprintf("msg-%d", msg.ID) }
+			class={ "thread-message", templ.KV("thread-focused", msg.ID == highlightID) }
+			data-msg-id={ fmt.Sprintf("%d", msg.ID) }
+			open
+		>
+			<summary class="thread-message-summary">
+				<span class="thread-msg-from">{ displayName(msg) }</span>
+				<span class="thread-msg-date">{ RelativeDate(msg.SentAt) }</span>
+				<span class="thread-msg-snippet">{ Truncate(msg.Snippet, 80) }</span>
+			</summary>
+			<div class="thread-message-expanded">
+				<dl class="header-list">
+					<dt>From</dt>
+					<dd>{ displayName(msg) } &lt;{ msg.FromEmail }&gt;</dd>
+					<dt>Date</dt>
+					<dd>{ FormatTime(msg.SentAt) }</dd>
+					<dt>Size</dt>
+					<dd>{ FormatBytes(msg.SizeEstimate) }</dd>
+					if len(msg.Labels) > 0 {
+						<dt>Labels</dt>
+						<dd>
+							<span class="label-list">
+								for _, label := range msg.Labels {
+									<span class="label-tag">{ label }</span>
+								}
+							</span>
+						</dd>
+					}
+				</dl>
+				<div id={ fmt.Sprintf("email-body-wrapper-%d", msg.ID) } class="email-render-wrapper">
+					<div class="email-images-banner">
+						<span>External images blocked.</span>
+						<a
+							href="#"
+							hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?showImages=true", msg.ID) }
+							hx-target="closest .email-render-wrapper"
+							hx-swap="outerHTML"
+						>Load images</a>
+					</div>
+					<iframe
+						src={ templ.SafeURL(fmt.Sprintf("/messages/%d/body", msg.ID)) }
+						sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+						class="email-iframe"
+						scrolling="no"
+						frameborder="0"
+					></iframe>
+				</div>
+				if msg.HasAttachments {
+					<div class="thread-attachments">
+						<span class="attachment-count">{ fmt.Sprintf("%d", msg.AttachmentCount) } attachment(s)</span>
+						<a href={ templ.SafeURL(fmt.Sprintf("/messages/%d", msg.ID)) } class="attachment-detail-link">View details</a>
+					</div>
+				}
+			</div>
+		</details>
+	} else {
+		<details
+			id={ fmt.Sprintf("msg-%d", msg.ID) }
+			class="thread-message"
+			data-msg-id={ fmt.Sprintf("%d", msg.ID) }
+		>
+			<summary class="thread-message-summary">
+				<span class="thread-msg-from">{ displayName(msg) }</span>
+				<span class="thread-msg-date">{ RelativeDate(msg.SentAt) }</span>
+				<span class="thread-msg-snippet">{ Truncate(msg.Snippet, 80) }</span>
+			</summary>
+			<div
+				class="thread-message-body"
+				hx-get={ fmt.Sprintf("/messages/%d/body-wrapper", msg.ID) }
+				hx-trigger="toggle once"
+				hx-swap="innerHTML"
+			>
+				<p class="loading-placeholder">Loading message...</p>
+			</div>
+		</details>
+	}
+}
