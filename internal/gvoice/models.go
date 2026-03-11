@@ -6,12 +6,12 @@ import "time"
 type fileType int
 
 const (
-	fileTypeText     fileType = iota // SMS/MMS conversation
-	fileTypeReceived                 // Received call
-	fileTypePlaced                   // Placed call
-	fileTypeMissed                   // Missed call
-	fileTypeVoicemail                // Voicemail
-	fileTypeGroup                    // Group conversation
+	fileTypeText      fileType = iota // SMS/MMS conversation
+	fileTypeReceived                  // Received call
+	fileTypePlaced                    // Placed call
+	fileTypeMissed                    // Missed call
+	fileTypeVoicemail                 // Voicemail
+	fileTypeGroup                     // Group conversation
 )
 
 func (ft fileType) String() string {
@@ -62,10 +62,10 @@ type ownerPhones struct {
 // indexEntry is a pre-indexed reference to a single message or call record
 // within a Takeout HTML file. One HTML file may contain many messages.
 type indexEntry struct {
-	ID           string   // deterministic dedup ID (sha256-based)
-	ThreadID     string   // conversation grouping key
-	FilePath     string   // path to HTML file
-	MessageIndex int      // index within the HTML file (for text files with multiple messages)
+	ID           string // deterministic dedup ID (sha256-based)
+	ThreadID     string // conversation grouping key
+	FilePath     string // path to HTML file
+	MessageIndex int    // index within the HTML file (for text files with multiple messages)
 	Timestamp    time.Time
 	FileType     fileType
 	Labels       []string // e.g., ["sms", "inbox"]
@@ -89,10 +89,10 @@ type attachmentRef struct {
 
 // callRecord is a parsed call log entry.
 type callRecord struct {
-	CallType fileType  // received, placed, missed, voicemail
-	Phone    string    // contact phone number
-	Name     string    // contact display name
+	CallType  fileType // received, placed, missed, voicemail
+	Phone     string   // contact phone number
+	Name      string   // contact display name
 	Timestamp time.Time
-	Duration string    // ISO 8601 duration (e.g., "PT1M23S")
-	Labels   []string  // from the HTML tags section
+	Duration  string   // ISO 8601 duration (e.g., "PT1M23S")
+	Labels    []string // from the HTML tags section
 }

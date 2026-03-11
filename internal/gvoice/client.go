@@ -277,12 +277,12 @@ func (c *Client) indexCallFile(filePath, contactName string, ft fileType) (*inde
 	label := labelForFileType(ft)
 
 	return &indexEntry{
-		ID:       id,
-		ThreadID: threadID,
-		FilePath: filePath,
+		ID:        id,
+		ThreadID:  threadID,
+		FilePath:  filePath,
 		Timestamp: record.Timestamp,
-		FileType: ft,
-		Labels:   []string{label},
+		FileType:  ft,
+		Labels:    []string{label},
 	}, nil
 }
 
