@@ -76,19 +76,7 @@ func (h *handlers) pendingDeletionCount() int {
 	return len(manifests)
 }
 
-// --- Page handlers (stubs for Plans 03-04; dashboard/messages implemented in Plan 02) ---
-
-func (h *handlers) aggregate(w http.ResponseWriter, r *http.Request) {
-	h.renderPage(w, r, "Aggregate", templates.StubPage("Aggregate"))
-}
-
-func (h *handlers) aggregateDrilldown(w http.ResponseWriter, r *http.Request) {
-	h.renderPage(w, r, "Aggregate", templates.StubPage("Aggregate Drilldown"))
-}
-
-func (h *handlers) searchPage(w http.ResponseWriter, r *http.Request) {
-	h.renderPage(w, r, "Search", templates.StubPage("Search"))
-}
+// --- Page handlers (stubs for Plan 04; aggregate/search/messages implemented in Plans 02-03) ---
 
 func (h *handlers) deletionsPage(w http.ResponseWriter, r *http.Request) {
 	h.renderPage(w, r, "Deletions", templates.StubPage("Deletions"))

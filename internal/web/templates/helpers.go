@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// BreadcrumbItem is a navigable breadcrumb segment used in drill-down pages.
+type BreadcrumbItem struct {
+	Label string
+	URL   string
+}
+
 // FormatBytes converts a byte count to a human-readable string (KB, MB, GB).
 func FormatBytes(b int64) string {
 	switch {
