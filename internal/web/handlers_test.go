@@ -51,7 +51,11 @@ func (m *mockEngine) GetMessage(_ context.Context, id int64) (*query.MessageDeta
 		From:     []query.Address{{Email: "alice@example.com", Name: "Alice"}},
 		To:       []query.Address{{Email: "bob@example.com", Name: "Bob"}},
 		BodyText: "This is the test message body.",
-		SentAt:   time.Now(),
+		BodyHTML: `<p>Hello <b>world</b></p>`,
+		Attachments: []query.AttachmentInfo{
+			{ID: 10, ContentID: "img1@example", ContentHash: "abc123"},
+		},
+		SentAt: time.Now(),
 	}, nil
 }
 
@@ -340,6 +344,157 @@ func TestStageDeletion(t *testing.T) {
 	ct := resp.Header.Get("Content-Type")
 	if !strings.Contains(ct, "text/html") {
 		t.Errorf("POST /deletions/stage: expected Content-Type text/html, got %q", ct)
+	}
+}
+
+// TestMessageBodyEndpoint verifies GET /messages/{id}/body returns standalone HTML.
+func TestMessageBodyEndpoint(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/messages/1/body")
+	if err != nil {
+		t.Fatalf("GET /messages/1/body: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /messages/1/body: expected status 200, got %d", resp.StatusCode)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/html") {
+		t.Errorf("GET /messages/1/body: expected Content-Type text/html, got %q", ct)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "<html") {
+		t.Errorf("GET /messages/1/body: body does not contain <html")
+	}
+}
+
+// TestMessageBodyEndpointStandalone verifies the body endpoint is NOT wrapped in the app layout.
+func TestMessageBodyEndpointStandalone(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/messages/1/body")
+	if err != nil {
+		t.Fatalf("GET /messages/1/body: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if strings.Contains(bodyStr, "navbar") {
+		t.Errorf("GET /messages/1/body: body should NOT contain navbar (must be standalone)")
+	}
+	if !strings.Contains(bodyStr, "<html") {
+		t.Errorf("GET /messages/1/body: body should contain <html")
+	}
+}
+
+// TestMessageBodyEndpointShowImages verifies CSP header allows external img-src with showImages=true.
+func TestMessageBodyEndpointShowImages(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/messages/1/body?showImages=true")
+	if err != nil {
+		t.Fatalf("GET /messages/1/body?showImages=true: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /messages/1/body?showImages=true: expected status 200, got %d", resp.StatusCode)
+	}
+
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "img-src * data:") {
+		t.Errorf("GET /messages/1/body?showImages=true: expected CSP to allow external img-src, got %q", csp)
+	}
+}
+
+// TestMessageBodyEndpointNotFound verifies 404 for unknown message ID.
+func TestMessageBodyEndpointNotFound(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/messages/99999/body")
+	if err != nil {
+		t.Fatalf("GET /messages/99999/body: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /messages/99999/body: expected status 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestMessageBodyWrapperEndpoint verifies the body-wrapper endpoint returns an HTMX fragment with banner.
+func TestMessageBodyWrapperEndpoint(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/messages/1/body-wrapper")
+	if err != nil {
+		t.Fatalf("GET /messages/1/body-wrapper: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /messages/1/body-wrapper: expected status 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, `id="email-body-wrapper"`) {
+		t.Errorf("GET /messages/1/body-wrapper: body does not contain email-body-wrapper div")
+	}
+	if !strings.Contains(bodyStr, "email-images-banner") {
+		t.Errorf("GET /messages/1/body-wrapper: body does not contain email-images-banner")
+	}
+	if !strings.Contains(bodyStr, "hx-get") {
+		t.Errorf("GET /messages/1/body-wrapper: body does not contain hx-get attribute")
+	}
+	if !strings.Contains(bodyStr, `hx-target="#email-body-wrapper"`) {
+		t.Errorf("GET /messages/1/body-wrapper: body does not contain hx-target attribute")
+	}
+	if !strings.Contains(bodyStr, `hx-swap="outerHTML"`) {
+		t.Errorf("GET /messages/1/body-wrapper: body does not contain hx-swap attribute")
+	}
+}
+
+// TestMessageBodyWrapperShowImages verifies body-wrapper with showImages=true has no banner.
+func TestMessageBodyWrapperShowImages(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/messages/1/body-wrapper?showImages=true")
+	if err != nil {
+		t.Fatalf("GET /messages/1/body-wrapper?showImages=true: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /messages/1/body-wrapper?showImages=true: expected status 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, `id="email-body-wrapper"`) {
+		t.Errorf("GET /messages/1/body-wrapper?showImages=true: body does not contain email-body-wrapper div")
+	}
+	if strings.Contains(bodyStr, "email-images-banner") {
+		t.Errorf("GET /messages/1/body-wrapper?showImages=true: body should NOT contain email-images-banner")
+	}
+	if !strings.Contains(bodyStr, "showImages=true") {
+		t.Errorf("GET /messages/1/body-wrapper?showImages=true: iframe src should contain showImages=true")
 	}
 }
 
