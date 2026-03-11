@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Completed 06-02-PLAN.md — Dashboard, Messages list, Message detail pages
-last_updated: "2026-03-11T02:23:55.254Z"
+stopped_at: Completed 06-03-PLAN.md — Aggregate + Search pages
+last_updated: "2026-03-11T02:33:34.589Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 5
-  completed_plans: 2
+  completed_plans: 3
   percent: 20
 ---
 
@@ -48,6 +48,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 *Updated after each plan completion*
 | Phase 06-foundation P01 | 6min | 2 tasks | 17 files |
 | Phase 06-foundation P02 | 4 | 2 tasks | 11 files |
+| Phase 06-foundation P03 | 6min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -62,6 +63,9 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Phase 06-02]: GetTotalStats used for messages pagination count — avoids adding SearchFastCount dependency for unfiltered list
 - [Phase 06-02]: hx-get on tr rows instead of templ.SafeScript onclick — templ.SafeScript returns string not ComponentScript, HTMX native row navigation is superior
 - [Phase 06-02]: Messages page limit locked to 50 in handler (not URL param); Pagination/SortHeader components extracted to components.templ for Plan 03-04 reuse
+- [Phase 06-03]: BreadcrumbItem defined in templates/helpers.go (templates package) so templ generated code can reference it directly
+- [Phase 06-03]: Sub-view tabs in drill-down include ?filterView={viewType} in URL; aggregateDrilldown branches on this param to call SubAggregate vs ListMessages
+- [Phase 06-03]: Two-tier search: SearchFast first (DuckDB/Parquet), fall back to Search (FTS5) only when fast returns zero and TextTerms exist
 
 ### Pending Todos
 
@@ -76,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T02:23:55.252Z
-Stopped at: Completed 06-02-PLAN.md — Dashboard, Messages list, Message detail pages
+Last session: 2026-03-11T02:33:34.588Z
+Stopped at: Completed 06-03-PLAN.md — Aggregate + Search pages
 Resume file: None
