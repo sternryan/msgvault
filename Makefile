@@ -12,26 +12,14 @@ LDFLAGS := -X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=$(VERSION) \
 
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 
-.PHONY: build build-release install clean test test-v fmt lint tidy shootout run-shootout setup-hooks web-install web-dev web-build help
+.PHONY: build build-go build-release install clean test test-v fmt lint tidy templ-generate shootout run-shootout setup-hooks help
 
-# Install web dependencies
-web-install:
-	cd web && npm install
-
-# Run web dev server
-web-dev:
-	cd web && npm run dev
-
-# Build web frontend
-web-build:
-	cd web && npm run build
-
-# Build the binary (debug) — builds frontend first if node_modules exists
-build: web-build
+# Build the binary (debug)
+build:
 	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o msgvault ./cmd/msgvault
 	@chmod +x msgvault
 
-# Build Go only (skip frontend)
+# Build Go binary (alias for build)
 build-go:
 	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o msgvault ./cmd/msgvault
 	@chmod +x msgvault
@@ -61,7 +49,6 @@ install:
 clean:
 	rm -f msgvault mimeshootout
 	rm -rf bin/
-	rm -rf internal/web/dist
 
 # Run tests
 test:
@@ -89,6 +76,10 @@ setup-hooks:
 tidy:
 	go mod tidy
 
+# Regenerate templ files (dev only — not part of build)
+templ-generate:
+	go run github.com/a-h/templ/cmd/templ@v0.3.1001 generate
+
 # Build the MIME shootout tool
 shootout:
 	CGO_ENABLED=1 go build -o mimeshootout ./scripts/mimeshootout
@@ -101,14 +92,12 @@ run-shootout: shootout
 help:
 	@echo "msgvault build targets:"
 	@echo ""
-	@echo "  build          - Build frontend + Go binary"
-	@echo "  build-go       - Build Go binary only (skip frontend)"
+	@echo "  build          - Build Go binary (no npm required)"
+	@echo "  build-go       - Alias for build"
 	@echo "  build-release  - Release build (optimized, stripped)"
 	@echo "  install        - Install to ~/.local/bin or GOPATH"
 	@echo ""
-	@echo "  web-install    - Install frontend dependencies"
-	@echo "  web-dev        - Run frontend dev server"
-	@echo "  web-build      - Build frontend"
+	@echo "  templ-generate - Regenerate _templ.go files (dev only)"
 	@echo ""
 	@echo "  test           - Run tests"
 	@echo "  test-v         - Run tests (verbose)"
