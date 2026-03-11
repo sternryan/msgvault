@@ -703,6 +703,42 @@ func TestThreadLazyLoad(t *testing.T) {
 	}
 }
 
+// TestSortHeaderEmitsSortField verifies the messages page renders SortHeader with
+// data-sort-field attributes and active class on the current sort column.
+func TestSortHeaderEmitsSortField(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/messages?sortField=date&sortDir=desc")
+	if err != nil {
+		t.Fatalf("GET /messages?sortField=date&sortDir=desc: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /messages: expected status 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+	bodyStr := string(body)
+
+	// All three sort columns must emit data-sort-field
+	for _, field := range []string{"date", "subject", "size"} {
+		want := `data-sort-field="` + field + `"`
+		if !strings.Contains(bodyStr, want) {
+			t.Errorf("body missing %s", want)
+		}
+	}
+
+	// The active sort column (date, desc) must have both sortable-header and active classes
+	if !strings.Contains(bodyStr, `class="sortable-header active"`) {
+		t.Errorf("body missing active sort column: expected th with class=\"sortable-header active\"")
+	}
+}
+
 // TestAccountFilter verifies sourceId param is accepted and pages render.
 func TestAccountFilter(t *testing.T) {
 	srv := setupTestServer(t)
