@@ -769,3 +769,142 @@ kbd {
     border-radius: 4px;
     background: #fff;
 }
+
+/* ---- Thread View ---- */
+
+.thread-view {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.thread-header {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--base02);
+}
+
+.thread-subject {
+    margin: 0 0 0.25rem 0;
+    color: var(--base1);
+    font-size: 1.3rem;
+}
+
+.thread-participants {
+    color: var(--base01);
+    margin: 0 0 0.25rem 0;
+    font-size: 0.9rem;
+}
+
+.thread-meta {
+    color: var(--base01);
+    margin: 0;
+    font-size: 0.85rem;
+}
+
+.thread-message {
+    border-bottom: 1px solid var(--base02);
+    margin-bottom: 0;
+    transition: border-left-color 0.15s ease;
+    border-left: 2px solid transparent;
+}
+
+.thread-message.thread-focused {
+    border-left: 2px solid var(--cyan);
+}
+
+.thread-message-summary {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    cursor: pointer;
+    color: var(--base01);
+    font-size: 0.9rem;
+    list-style: none;
+}
+
+.thread-message-summary::-webkit-details-marker {
+    display: none;
+}
+
+.thread-message-summary::marker {
+    content: "";
+}
+
+.thread-message[open] > .thread-message-summary {
+    color: var(--base0);
+    font-weight: 500;
+}
+
+.thread-msg-from {
+    flex-shrink: 0;
+    font-weight: 500;
+    min-width: 120px;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thread-msg-date {
+    flex-shrink: 0;
+    font-size: 0.8rem;
+    color: var(--base01);
+    min-width: 80px;
+    text-align: right;
+}
+
+.thread-msg-snippet {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--base01);
+    font-size: 0.85rem;
+}
+
+.thread-message-expanded {
+    padding: 0.5rem 0.75rem 1rem;
+}
+
+.thread-message-body {
+    padding: 0.5rem 0.75rem 1rem;
+}
+
+.thread-attachments {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--base02);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.thread-attachments .attachment-count {
+    color: var(--base01);
+}
+
+.thread-attachments .attachment-detail-link {
+    color: var(--blue);
+    font-size: 0.8rem;
+}
+
+.thread-link {
+    display: inline-block;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--cyan);
+}
+
+.thread-link:hover {
+    text-decoration: underline;
+}
+
+.loading-placeholder {
+    color: var(--base01);
+    font-style: italic;
+    padding: 1rem;
+    font-size: 0.85rem;
+}
