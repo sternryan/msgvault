@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Completed 06-04-PLAN.md — Deletions + Keyboard Shortcuts + Account Filter
-last_updated: "2026-03-11T02:42:27.592Z"
+stopped_at: Completed 06-05-PLAN.md — React SPA and JSON API Removal
+last_updated: "2026-03-11T02:47:50.055Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 5
-  completed_plans: 4
+  completed_plans: 5
   percent: 20
 ---
 
@@ -50,6 +50,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 | Phase 06-foundation P02 | 4 | 2 tasks | 11 files |
 | Phase 06-foundation P03 | 6min | 2 tasks | 8 files |
 | Phase 06-foundation P04 | 5 | 2 tasks | 10 files |
+| Phase 06-foundation P05 | 3min | 2 tasks | 36 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Phase 06-04]: Two root-level OOB response: StageResult then DeletionBadgeOOB rendered sequentially to writer — HTMX silently ignores nested OOB swaps
 - [Phase 06-04]: Account filter uses JS URL manipulation (not HTMX hx-get): setupAccountFilter() preserves all existing URL params when changing sourceId
 - [Phase 06-04]: layout.templ always renders deletion-badge span (empty when count=0) so OOB swap can clear it
+- [Phase 06-foundation]: serve.go rewritten as scheduler-only daemon — JSON API removed since React SPA is gone; templ-generate is dev-only target since _templ.go files are committed to repo
 
 ### Pending Todos
 
@@ -84,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T02:42:27.591Z
-Stopped at: Completed 06-04-PLAN.md — Deletions + Keyboard Shortcuts + Account Filter
+Last session: 2026-03-11T02:47:50.053Z
+Stopped at: Completed 06-05-PLAN.md — React SPA and JSON API Removal
 Resume file: None
