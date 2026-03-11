@@ -67,6 +67,8 @@ templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64,
 					Deletions
 					if pendingDeletions > 0 {
 						<span id="deletion-badge" class="badge">{ fmt.Sprintf("%d", pendingDeletions) }</span>
+					} else {
+						<span id="deletion-badge"></span>
 					}
 				</a>
 				<span class="nav-spacer"></span>

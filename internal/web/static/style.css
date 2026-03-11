@@ -683,3 +683,55 @@ input[type="checkbox"] {
         padding: 0.25rem 0.4rem;
     }
 }
+
+/* ---- Status badge (deletions table) ---- */
+
+.status-badge {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+
+/* ---- Staging bar (aggregate drilldown) ---- */
+
+.staging-bar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--base02);
+    flex-wrap: wrap;
+}
+
+.stage-success {
+    color: var(--green);
+    font-size: 0.9rem;
+}
+
+.stage-error {
+    color: var(--red);
+    font-size: 0.9rem;
+}
+
+/* ---- kbd element styling ---- */
+
+kbd {
+    background-color: var(--base02);
+    border: 1px solid var(--base01);
+    border-radius: 3px;
+    padding: 0.1rem 0.4rem;
+    font-family: monospace;
+    font-size: 0.85rem;
+}
+
+.help-dismiss {
+    color: var(--base01);
+    text-align: center;
+    margin-top: 1rem;
+}
+
+.help-content table td {
+    padding: 0.4rem 1rem;
+}
