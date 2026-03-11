@@ -2,18 +2,13 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/wesm/msgvault/internal/api"
 	"github.com/wesm/msgvault/internal/gmail"
 	"github.com/wesm/msgvault/internal/oauth"
 	"github.com/wesm/msgvault/internal/scheduler"
@@ -27,7 +22,6 @@ var serveCmd = &cobra.Command{
 	Long: `Run msgvault as a long-running daemon that syncs email accounts on schedule.
 
 The daemon runs in the foreground and performs:
-  - HTTP API server on configured port (default: 8080)
   - Scheduled incremental syncs based on account config
   - Automatic cache rebuilds after each sync
 
@@ -53,11 +47,6 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	// Validate security posture before doing any work
-	if err := cfg.Server.ValidateSecure(); err != nil {
-		return err
-	}
-
 	// Validate config
 	if cfg.OAuth.ClientSecrets == "" {
 		return errOAuthNotConfigured()
@@ -66,8 +55,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Check for scheduled accounts (warn but don't fail - allows token upload first)
 	scheduled := cfg.ScheduledAccounts()
 	if len(scheduled) == 0 {
-		logger.Warn("no scheduled accounts configured - server will start but no syncs will run",
-			"hint", "Add accounts to config.toml or upload tokens via API first")
+		logger.Warn("no scheduled accounts configured - daemon will start but no syncs will run",
+			"hint", "Add accounts with a schedule field to config.toml")
 	}
 
 	// Open database
@@ -104,7 +93,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if count == 0 {
-		logger.Warn("no accounts scheduled - upload tokens via API and add accounts to config.toml")
+		logger.Warn("no accounts scheduled - add accounts to config.toml with a schedule field")
 	}
 
 	// Set up signal handling for graceful shutdown
@@ -117,27 +106,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Start the scheduler
 	sched.Start()
 
-	// Create adapters for the API interfaces
-	storeAdapter := &storeAPIAdapter{store: s}
-	schedAdapter := &schedulerAdapter{scheduler: sched}
-
-	// Create and start API server
-	apiServer := api.NewServer(cfg, storeAdapter, schedAdapter, logger)
-
-	// Start API server in goroutine
-	serverErr := make(chan error, 1)
-	go func() {
-		if err := apiServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErr <- err
-		}
-	}()
-
-	bindAddr := cfg.Server.BindAddr
-	if bindAddr == "" {
-		bindAddr = "127.0.0.1"
-	}
 	fmt.Printf("msgvault daemon started\n")
-	fmt.Printf("  API server: http://%s\n", net.JoinHostPort(bindAddr, strconv.Itoa(cfg.Server.APIPort)))
 	fmt.Printf("  Scheduled accounts: %d\n", count)
 	fmt.Printf("  Data directory: %s\n", cfg.Data.DataDir)
 	fmt.Println()
@@ -148,28 +117,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 	for _, status := range sched.Status() {
 		fmt.Printf("  %s: next sync at %s\n", status.Email, status.NextRun.Local().Format("2006-01-02 15:04:05"))
 	}
-	fmt.Println()
+	if count > 0 {
+		fmt.Println()
+	}
 
-	// Wait for shutdown signal or server error
+	// Wait for shutdown signal
 	select {
 	case sig := <-sigChan:
 		logger.Info("received shutdown signal", "signal", sig)
 		fmt.Printf("\nReceived %s, shutting down...\n", sig)
-	case err := <-serverErr:
-		logger.Error("API server error", "error", err)
-		fmt.Printf("\nAPI server error: %v\n", err)
 	case <-ctx.Done():
 		logger.Info("context cancelled")
 	}
 
 	// Graceful shutdown
-	fmt.Println("Shutting down API server...")
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	if err := apiServer.Shutdown(shutdownCtx); err != nil {
-		logger.Error("API server shutdown error", "error", err)
-	}
-
 	fmt.Println("Waiting for running syncs to complete...")
 	schedCtx := sched.Stop()
 
@@ -182,56 +143,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// storeAPIAdapter adapts store.Store to api.MessageStore.
-// Since api.APIMessage, api.StoreStats, etc. are type aliases for store types,
-// the adapter methods are simple pass-throughs with no conversion needed.
-type storeAPIAdapter struct {
-	store *store.Store
-}
-
-func (a *storeAPIAdapter) GetStats() (*api.StoreStats, error) {
-	return a.store.GetStats()
-}
-
-func (a *storeAPIAdapter) ListMessages(offset, limit int) ([]api.APIMessage, int64, error) {
-	return a.store.ListMessages(offset, limit)
-}
-
-func (a *storeAPIAdapter) GetMessage(id int64) (*api.APIMessage, error) {
-	return a.store.GetMessage(id)
-}
-
-func (a *storeAPIAdapter) SearchMessages(query string, offset, limit int) ([]api.APIMessage, int64, error) {
-	return a.store.SearchMessages(query, offset, limit)
-}
-
-// schedulerAdapter adapts scheduler.Scheduler to api.SyncScheduler.
-// Since api.AccountStatus is a type alias for scheduler.AccountStatus,
-// the adapter methods are simple pass-throughs.
-type schedulerAdapter struct {
-	scheduler *scheduler.Scheduler
-}
-
-func (a *schedulerAdapter) IsScheduled(email string) bool {
-	return a.scheduler.IsScheduled(email)
-}
-
-func (a *schedulerAdapter) TriggerSync(email string) error {
-	return a.scheduler.TriggerSync(email)
-}
-
-func (a *schedulerAdapter) AddAccount(email, schedule string) error {
-	return a.scheduler.AddAccount(email, schedule)
-}
-
-func (a *schedulerAdapter) IsRunning() bool {
-	return a.scheduler.IsRunning()
-}
-
-func (a *schedulerAdapter) Status() []api.AccountStatus {
-	return a.scheduler.Status()
 }
 
 // runScheduledSync performs an incremental sync for a scheduled account.
