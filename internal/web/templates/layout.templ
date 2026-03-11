@@ -75,12 +75,6 @@ templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64,
 				<select
 					id="account-filter"
 					name="sourceId"
-					hx-get={ currentPath }
-					hx-trigger="change"
-					hx-target="#main-content"
-					hx-select="#main-content"
-					hx-swap="outerHTML"
-					hx-replace-url="true"
 				>
 					<option value="">All accounts</option>
 					for _, acc := range accounts {
