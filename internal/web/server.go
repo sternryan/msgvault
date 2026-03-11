@@ -1,49 +1,80 @@
 // Package web provides an HTTP server for the msgvault web UI.
-// It serves a React SPA and a JSON REST API wrapping the query.Engine interface.
+// It serves server-rendered HTML using Templ templates and HTMX for dynamic behavior.
 package web
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/query"
 )
 
-// Server serves the web UI and REST API.
+// Server serves the web UI with server-rendered HTML.
 type Server struct {
 	engine         query.Engine
 	attachmentsDir string
 	deletions      *deletion.Manager
 	logger         *slog.Logger
-	dev            bool
 }
 
 // NewServer creates a new web server.
-func NewServer(engine query.Engine, attachmentsDir string, deletions *deletion.Manager, logger *slog.Logger, dev bool) *Server {
+func NewServer(engine query.Engine, attachmentsDir string, deletions *deletion.Manager, logger *slog.Logger) *Server {
 	return &Server{
 		engine:         engine,
 		attachmentsDir: attachmentsDir,
 		deletions:      deletions,
 		logger:         logger,
-		dev:            dev,
 	}
+}
+
+// buildRouter constructs and returns the chi router with all routes registered.
+// Extracted so tests can reuse it without starting an HTTP listener.
+func (s *Server) buildRouter() chi.Router {
+	h := &handlers{
+		engine:         s.engine,
+		attachmentsDir: s.attachmentsDir,
+		deletions:      s.deletions,
+		logger:         s.logger,
+	}
+
+	r := chi.NewRouter()
+
+	// Middleware
+	r.Use(middleware.RealIP)
+	r.Use(loggingMiddleware(s.logger))
+	r.Use(recoveryMiddleware(s.logger))
+
+	// Static file serving
+	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(staticSubFS()))))
+
+	// Page routes
+	r.Get("/", h.dashboard)
+	r.Get("/messages", h.messagesList)
+	r.Get("/messages/{id}", h.messageDetail)
+	r.Get("/aggregate", h.aggregate)
+	r.Get("/aggregate/drilldown", h.aggregateDrilldown)
+	r.Get("/search", h.searchPage)
+	r.Get("/deletions", h.deletionsPage)
+	r.Post("/deletions/stage", h.stageDeletion)
+	r.Delete("/deletions/{id}", h.cancelDeletion)
+	r.Get("/attachments/{id}/download", h.downloadAttachment)
+	r.Get("/attachments/{id}/inline", h.inlineAttachment)
+
+	return r
 }
 
 // Start listens on the given address and serves until the context is cancelled.
 func (s *Server) Start(ctx context.Context, addr string) error {
-	mux := http.NewServeMux()
-	s.registerRoutes(mux)
+	r := s.buildRouter()
 
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: s.applyMiddleware(mux),
+		Handler: r,
 		BaseContext: func(_ net.Listener) context.Context {
 			return ctx
 		},
@@ -63,105 +94,4 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 	case <-ctx.Done():
 		return srv.Shutdown(context.Background())
 	}
-}
-
-func (s *Server) registerRoutes(mux *http.ServeMux) {
-	h := &handlers{
-		engine:         s.engine,
-		attachmentsDir: s.attachmentsDir,
-		deletions:      s.deletions,
-		logger:         s.logger,
-	}
-
-	// API routes
-	mux.HandleFunc("GET /api/v1/stats", h.getStats)
-	mux.HandleFunc("GET /api/v1/accounts", h.listAccounts)
-	mux.HandleFunc("GET /api/v1/aggregate", h.aggregate)
-	mux.HandleFunc("GET /api/v1/sub-aggregate", h.subAggregate)
-	mux.HandleFunc("GET /api/v1/messages", h.listMessages)
-	mux.HandleFunc("GET /api/v1/messages/{id}", h.getMessage)
-	mux.HandleFunc("GET /api/v1/messages/{id}/thread", h.getThread)
-	mux.HandleFunc("GET /api/v1/search", h.search)
-	mux.HandleFunc("GET /api/v1/search/count", h.searchCount)
-	mux.HandleFunc("GET /api/v1/attachments/{id}/download", h.downloadAttachment)
-	mux.HandleFunc("GET /api/v1/attachments/{id}/inline", h.inlineAttachment)
-	mux.HandleFunc("POST /api/v1/deletions/stage", h.stageDeletion)
-	mux.HandleFunc("POST /api/v1/deletions/confirm", h.confirmDeletion)
-	mux.HandleFunc("GET /api/v1/deletions", h.listDeletions)
-	mux.HandleFunc("DELETE /api/v1/deletions/{id}", h.cancelDeletion)
-
-	// SPA fallback: serve frontend for non-API routes
-	mux.Handle("/", s.spaHandler())
-}
-
-// spaHandler returns an http.Handler that serves the embedded SPA.
-// Non-file paths (no extension or not found) serve index.html for client-side routing.
-func (s *Server) spaHandler() http.Handler {
-	distFS, err := fs.Sub(GetDistFS(), "dist")
-	if err != nil {
-		// Fallback: serve a placeholder
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, `<!DOCTYPE html><html><body><h1>msgvault</h1><p>Frontend not built. Run <code>make web-build</code></p></body></html>`)
-		})
-	}
-
-	fileServer := http.FileServer(http.FS(distFS))
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Try to serve the file directly
-		path := r.URL.Path
-		if path == "/" {
-			fileServer.ServeHTTP(w, r)
-			return
-		}
-
-		// Check if the file exists in the embedded FS
-		cleanPath := strings.TrimPrefix(path, "/")
-		if f, err := distFS.Open(cleanPath); err == nil {
-			f.Close()
-			fileServer.ServeHTTP(w, r)
-			return
-		}
-
-		// File not found — serve index.html for SPA client-side routing
-		r.URL.Path = "/"
-		fileServer.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) applyMiddleware(next http.Handler) http.Handler {
-	h := next
-
-	// Panic recovery
-	h = recoveryMiddleware(s.logger, h)
-
-	// Request logging
-	h = loggingMiddleware(s.logger, h)
-
-	// CORS (dev mode only)
-	if s.dev {
-		h = corsMiddleware(h)
-	}
-
-	return h
-}
-
-// apiResponse is the standard JSON response envelope.
-type apiResponse struct {
-	Data  any            `json:"data,omitempty"`
-	Meta  map[string]any `json:"meta,omitempty"`
-	Error string         `json:"error,omitempty"`
-}
-
-// writeJSON writes a JSON response with the given status code.
-func writeJSON(w http.ResponseWriter, status int, resp apiResponse) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(resp)
-}
-
-// writeError writes a JSON error response.
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, apiResponse{Error: msg})
 }
