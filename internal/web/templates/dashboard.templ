@@ -5,8 +5,8 @@ import (
 	"github.com/wesm/msgvault/internal/query"
 )
 
-// DashboardPage renders the dashboard with archive stats, top senders, and top domains.
-templ DashboardPage(stats *query.TotalStats, accounts []query.AccountInfo, topSenders, topDomains []query.AggregateRow) {
+// DashboardPage renders the dashboard with archive stats, top senders, top domains, and bar chart.
+templ DashboardPage(stats *query.TotalStats, accounts []query.AccountInfo, topSenders, topDomains []query.AggregateRow, chartData []query.AggregateRow, chartMaxCount int64) {
 	<div class="page-content">
 		if stats == nil || stats.MessageCount == 0 {
 			<div class="empty-state">
@@ -31,6 +31,26 @@ templ DashboardPage(stats *query.TotalStats, accounts []query.AccountInfo, topSe
 					<div class="stat-value">{ FormatNum(stats.AttachmentCount) }</div>
 				</div>
 			</div>
+			if len(chartData) > 0 {
+				<div class="archive-chart">
+					<h3>Archive Volume by Month</h3>
+					for _, row := range chartData {
+						<div class="chart-row"
+							hx-get={ fmt.Sprintf("/aggregate/drilldown?groupBy=time&filterKey=%s", row.Key) }
+							hx-select="#main-content"
+							hx-target="#main-content"
+							hx-swap="outerHTML"
+							hx-replace-url="true"
+						>
+							<span class="chart-label">{ row.Key }</span>
+							<div class="chart-bar-track">
+								<div class="chart-bar-fill" style={ fmt.Sprintf("width: %s%%", BarPercent(row.Count, chartMaxCount)) }></div>
+							</div>
+							<span class="chart-count">{ FormatNum(row.Count) }</span>
+						</div>
+					}
+				</div>
+			}
 			<div class="top-lists">
 				<div class="top-list">
 					<h3 class="top-list-title">Top Senders</h3>

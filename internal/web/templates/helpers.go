@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/wesm/msgvault/internal/query"
 )
 
 // BreadcrumbItem is a navigable breadcrumb segment used in drill-down pages.
@@ -82,4 +84,24 @@ func Truncate(s string, n int) string {
 		return s
 	}
 	return string(runes[:n]) + "..."
+}
+
+// MaxAggregateCount returns the maximum Count across a slice of AggregateRows.
+func MaxAggregateCount(rows []query.AggregateRow) int64 {
+	var max int64
+	for _, r := range rows {
+		if r.Count > max {
+			max = r.Count
+		}
+	}
+	return max
+}
+
+// BarPercent returns the bar width as a CSS percentage string (e.g. "73.4").
+func BarPercent(count, maxCount int64) string {
+	if maxCount == 0 {
+		return "0"
+	}
+	pct := float64(count) / float64(maxCount) * 100
+	return fmt.Sprintf("%.1f", pct)
 }
