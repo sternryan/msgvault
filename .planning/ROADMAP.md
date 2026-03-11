@@ -86,7 +86,11 @@ Plans:
   1. On a message with both text and HTML parts, user can toggle between plain text and HTML rendering and the preference persists in the URL
   2. The dashboard displays a time-series bar chart of archive volume using only CSS (no JS charting library)
   3. Triggering any HTMX partial update (search, sort, pagination, staging) shows a visible loading indicator until the response arrives
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 09-01-PLAN.md — Text/HTML body toggle (message detail + thread) and CSS bar chart for dashboard
+- [ ] 09-02-PLAN.md — Loading indicators on all HTMX partial update trigger points
 
 ## Progress
 
@@ -99,4 +103,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 | 6. Foundation | 5/5 | Complete   | 2026-03-11 | - |
 | 7. Email Rendering | 2/2 | Complete   | 2026-03-11 | - |
 | 8. Thread View | 2/2 | Complete   | 2026-03-11 | - |
-| 9. Polish | v1.1 | 0/TBD | Not started | - |
+| 9. Polish | v1.1 | 0/2 | Not started | - |
