@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Completed 06-03-PLAN.md — Aggregate + Search pages
-last_updated: "2026-03-11T02:33:34.589Z"
+stopped_at: Completed 06-04-PLAN.md — Deletions + Keyboard Shortcuts + Account Filter
+last_updated: "2026-03-11T02:42:27.592Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
   percent: 20
 ---
 
@@ -49,6 +49,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 | Phase 06-foundation P01 | 6min | 2 tasks | 17 files |
 | Phase 06-foundation P02 | 4 | 2 tasks | 11 files |
 | Phase 06-foundation P03 | 6min | 2 tasks | 8 files |
+| Phase 06-foundation P04 | 5 | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,9 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Phase 06-03]: BreadcrumbItem defined in templates/helpers.go (templates package) so templ generated code can reference it directly
 - [Phase 06-03]: Sub-view tabs in drill-down include ?filterView={viewType} in URL; aggregateDrilldown branches on this param to call SubAggregate vs ListMessages
 - [Phase 06-03]: Two-tier search: SearchFast first (DuckDB/Parquet), fall back to Search (FTS5) only when fast returns zero and TextTerms exist
+- [Phase 06-04]: Two root-level OOB response: StageResult then DeletionBadgeOOB rendered sequentially to writer — HTMX silently ignores nested OOB swaps
+- [Phase 06-04]: Account filter uses JS URL manipulation (not HTMX hx-get): setupAccountFilter() preserves all existing URL params when changing sourceId
+- [Phase 06-04]: layout.templ always renders deletion-badge span (empty when count=0) so OOB swap can clear it
 
 ### Pending Todos
 
@@ -80,6 +84,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T02:33:34.588Z
-Stopped at: Completed 06-03-PLAN.md — Aggregate + Search pages
+Last session: 2026-03-11T02:42:27.591Z
+Stopped at: Completed 06-04-PLAN.md — Deletions + Keyboard Shortcuts + Account Filter
 Resume file: None

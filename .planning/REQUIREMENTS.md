@@ -22,9 +22,9 @@ Requirements for the Web UI rebuild. Each maps to roadmap phases.
 - [x] **PARITY-03**: User can view paginated message list with sort and filter
 - [x] **PARITY-04**: User can search messages with full-text search (debounced input)
 - [x] **PARITY-05**: User can view message detail with headers, body, and attachments
-- [ ] **PARITY-06**: User can stage messages for deletion and manage staged deletions
-- [ ] **PARITY-07**: User can navigate the web UI with Vim-style keyboard shortcuts
-- [ ] **PARITY-08**: User can filter all views by account (multi-account support)
+- [x] **PARITY-06**: User can stage messages for deletion and manage staged deletions
+- [x] **PARITY-07**: User can navigate the web UI with Vim-style keyboard shortcuts
+- [x] **PARITY-08**: User can filter all views by account (multi-account support)
 
 ### Email Rendering
 
@@ -87,9 +87,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | PARITY-03 | Phase 6 | Complete |
 | PARITY-04 | Phase 6 | Complete |
 | PARITY-05 | Phase 6 | Complete |
-| PARITY-06 | Phase 6 | Pending |
-| PARITY-07 | Phase 6 | Pending |
-| PARITY-08 | Phase 6 | Pending |
+| PARITY-06 | Phase 6 | Complete |
+| PARITY-07 | Phase 6 | Complete |
+| PARITY-08 | Phase 6 | Complete |
 | RENDER-01 | Phase 7 | Pending |
 | RENDER-02 | Phase 7 | Pending |
 | RENDER-03 | Phase 7 | Pending |
