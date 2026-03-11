@@ -1,4 +1,15 @@
 // keys.js — full keyboard shortcut handler for msgvault web UI
+
+// Iframe auto-resize: listen for postMessage from email body iframe
+window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'msgvault-resize') {
+        var frame = document.getElementById('email-body-frame');
+        if (frame) {
+            frame.style.height = (e.data.height + 20) + 'px';
+        }
+    }
+});
+
 (function () {
     var currentRow = -1;
 

@@ -735,3 +735,37 @@ kbd {
 .help-content table td {
     padding: 0.4rem 1rem;
 }
+
+/* ---- Email rendering iframe ---- */
+
+.email-render-wrapper {
+    margin-top: 1rem;
+}
+
+.email-images-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    border: 1px solid var(--yellow);
+    border-radius: 4px;
+    background: var(--base02);
+    color: var(--yellow);
+    font-size: 0.85rem;
+}
+
+.email-images-banner a {
+    color: var(--yellow);
+    text-decoration: underline;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.email-iframe {
+    width: 100%;
+    min-height: 200px;
+    border: 1px solid var(--base01);
+    border-radius: 4px;
+    background: #fff;
+}
