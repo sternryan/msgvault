@@ -76,15 +76,7 @@ func (h *handlers) pendingDeletionCount() int {
 	return len(manifests)
 }
 
-// --- Page handlers (stubs for Plans 03-04; dashboard/messages in Plans 02) ---
-
-func (h *handlers) messagesList(w http.ResponseWriter, r *http.Request) {
-	h.renderPage(w, r, "Messages", templates.StubPage("Messages"))
-}
-
-func (h *handlers) messageDetail(w http.ResponseWriter, r *http.Request) {
-	h.renderPage(w, r, "Message", templates.StubPage("Message Detail"))
-}
+// --- Page handlers (stubs for Plans 03-04; dashboard/messages implemented in Plan 02) ---
 
 func (h *handlers) aggregate(w http.ResponseWriter, r *http.Request) {
 	h.renderPage(w, r, "Aggregate", templates.StubPage("Aggregate"))
