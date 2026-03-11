@@ -39,7 +39,14 @@ Phases 1-5 delivered the complete offline Gmail archiver: full/incremental sync,
   3. User can access Dashboard, Messages, Aggregate, Search, Message Detail, and Deletions pages — all functional with real data
   4. User can filter any view by account and navigate with Vim-style keyboard shortcuts
   5. Staging a message for deletion updates the deletion badge count without a full page reload
-**Plans**: TBD
+**Plans:** 5 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — Templ + HTMX + chi foundation (static assets, embed, router, layout template, stub handlers)
+- [ ] 06-02-PLAN.md — Dashboard, Messages list, and Message Detail pages with real data
+- [ ] 06-03-PLAN.md — Aggregate page with 7 view types and drill-down + Search page with debounced live search
+- [ ] 06-04-PLAN.md — Deletions staging with OOB badge, keyboard shortcuts, account filter propagation
+- [ ] 06-05-PLAN.md — Cleanup (delete React SPA and JSON API) + end-to-end browser verification
 
 ### Phase 7: Email Rendering
 **Goal**: HTML email bodies render correctly and securely — sanitized before reaching the browser, isolated in sandboxed iframes so email CSS cannot break application layout, with inline images resolved from local attachments and external images blocked by default
@@ -81,7 +88,7 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-5. Core Archive | v1.0 | - | Complete | 2026-03-10 |
-| 6. Foundation | v1.1 | 0/TBD | Not started | - |
+| 6. Foundation | v1.1 | 0/5 | Planning complete | - |
 | 7. Email Rendering | v1.1 | 0/TBD | Not started | - |
 | 8. Thread View | v1.1 | 0/TBD | Not started | - |
 | 9. Polish | v1.1 | 0/TBD | Not started | - |
