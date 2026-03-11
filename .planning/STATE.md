@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Completed 06-01-PLAN.md — Templ+HTMX+chi foundation
-last_updated: "2026-03-11T02:16:56.604Z"
+stopped_at: Completed 06-02-PLAN.md — Dashboard, Messages list, Message detail pages
+last_updated: "2026-03-11T02:23:55.254Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
+  completed_plans: 2
   percent: 20
 ---
 
@@ -47,6 +47,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 
 *Updated after each plan completion*
 | Phase 06-foundation P01 | 6min | 2 tasks | 17 files |
+| Phase 06-foundation P02 | 4 | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -58,6 +59,9 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Pre-v1.1]: All HTML email bodies render in sandboxed iframe — never allow-scripts + allow-same-origin together
 - [Pre-v1.1]: HTMX hx-select pattern for partials — full pages always, HTMX extracts fragment client-side
 - [Phase 06-01]: buildRouter() extracted from Start() for testability; chi middleware signatures updated to func(logger) func(http.Handler) http.Handler; renderPage centralizes account listing and deletion count on every page
+- [Phase 06-02]: GetTotalStats used for messages pagination count — avoids adding SearchFastCount dependency for unfiltered list
+- [Phase 06-02]: hx-get on tr rows instead of templ.SafeScript onclick — templ.SafeScript returns string not ComponentScript, HTMX native row navigation is superior
+- [Phase 06-02]: Messages page limit locked to 50 in handler (not URL param); Pagination/SortHeader components extracted to components.templ for Plan 03-04 reuse
 
 ### Pending Todos
 
@@ -72,6 +76,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T02:16:56.602Z
-Stopped at: Completed 06-01-PLAN.md — Templ+HTMX+chi foundation
+Last session: 2026-03-11T02:23:55.252Z
+Stopped at: Completed 06-02-PLAN.md — Dashboard, Messages list, Message detail pages
 Resume file: None

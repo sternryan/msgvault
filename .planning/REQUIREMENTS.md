@@ -17,11 +17,11 @@ Requirements for the Web UI rebuild. Each maps to roadmap phases.
 
 ### Web UI Parity
 
-- [ ] **PARITY-01**: User can view dashboard with archive stats overview and time series chart
+- [x] **PARITY-01**: User can view dashboard with archive stats overview and time series chart
 - [ ] **PARITY-02**: User can browse aggregates with drill-down across all 7 view types (Senders, Sender Names, Recipients, Recipient Names, Domains, Labels, Time)
-- [ ] **PARITY-03**: User can view paginated message list with sort and filter
+- [x] **PARITY-03**: User can view paginated message list with sort and filter
 - [ ] **PARITY-04**: User can search messages with full-text search (debounced input)
-- [ ] **PARITY-05**: User can view message detail with headers, body, and attachments
+- [x] **PARITY-05**: User can view message detail with headers, body, and attachments
 - [ ] **PARITY-06**: User can stage messages for deletion and manage staged deletions
 - [ ] **PARITY-07**: User can navigate the web UI with Vim-style keyboard shortcuts
 - [ ] **PARITY-08**: User can filter all views by account (multi-account support)
@@ -82,11 +82,11 @@ Deferred to future release. Tracked but not in current roadmap.
 | FOUND-03 | Phase 6 | Pending |
 | FOUND-04 | Phase 6 | Complete |
 | FOUND-05 | Phase 6 | Complete |
-| PARITY-01 | Phase 6 | Pending |
+| PARITY-01 | Phase 6 | Complete |
 | PARITY-02 | Phase 6 | Pending |
-| PARITY-03 | Phase 6 | Pending |
+| PARITY-03 | Phase 6 | Complete |
 | PARITY-04 | Phase 6 | Pending |
-| PARITY-05 | Phase 6 | Pending |
+| PARITY-05 | Phase 6 | Complete |
 | PARITY-06 | Phase 6 | Pending |
 | PARITY-07 | Phase 6 | Pending |
 | PARITY-08 | Phase 6 | Pending |

@@ -39,7 +39,7 @@ Phases 1-5 delivered the complete offline Gmail archiver: full/incremental sync,
   3. User can access Dashboard, Messages, Aggregate, Search, Message Detail, and Deletions pages — all functional with real data
   4. User can filter any view by account and navigate with Vim-style keyboard shortcuts
   5. Staging a message for deletion updates the deletion badge count without a full page reload
-**Plans:** 1/5 plans executed
+**Plans:** 2/5 plans executed
 
 Plans:
 - [ ] 06-01-PLAN.md — Templ + HTMX + chi foundation (static assets, embed, router, layout template, stub handlers)
@@ -88,7 +88,7 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-5. Core Archive | v1.0 | - | Complete | 2026-03-10 |
-| 6. Foundation | 1/5 | In Progress|  | - |
+| 6. Foundation | 2/5 | In Progress|  | - |
 | 7. Email Rendering | v1.1 | 0/TBD | Not started | - |
 | 8. Thread View | v1.1 | 0/TBD | Not started | - |
 | 9. Polish | v1.1 | 0/TBD | Not started | - |
