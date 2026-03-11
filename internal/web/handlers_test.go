@@ -46,12 +46,12 @@ func (m *mockEngine) GetMessage(_ context.Context, id int64) (*query.MessageDeta
 		return nil, nil
 	}
 	return &query.MessageDetail{
-		ID:      id,
-		Subject: "Test Message Subject",
-		From:    []query.Address{{Email: "alice@example.com", Name: "Alice"}},
-		To:      []query.Address{{Email: "bob@example.com", Name: "Bob"}},
+		ID:       id,
+		Subject:  "Test Message Subject",
+		From:     []query.Address{{Email: "alice@example.com", Name: "Alice"}},
+		To:       []query.Address{{Email: "bob@example.com", Name: "Bob"}},
 		BodyText: "This is the test message body.",
-		SentAt:  time.Now(),
+		SentAt:   time.Now(),
 	}, nil
 }
 
