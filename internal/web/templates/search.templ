@@ -1,0 +1,96 @@
+package templates
+
+import (
+	"fmt"
+
+	"github.com/wesm/msgvault/internal/query"
+)
+
+// SearchPage renders the search page with a debounced search input and results.
+// mode is "metadata" for DuckDB fast path, "full-text" for FTS5 fallback.
+// offset is the current pagination offset (0-based).
+templ SearchPage(q string, results []query.MessageSummary, total int64, baseURL string, mode string, offset int) {
+	<div class="page-content" id="main-content">
+		<div class="page-header">
+			<h2 class="page-title">Search</h2>
+		</div>
+		<div class="search-bar">
+			<input
+				type="text"
+				name="q"
+				value={ q }
+				placeholder="Search emails (e.g., from:alice subject:meeting)"
+				hx-get="/search"
+				hx-trigger="input changed delay:500ms, keyup[key=='Enter']"
+				hx-select="#main-content"
+				hx-target="#main-content"
+				hx-replace-url="true"
+				hx-include="[name='sourceId']"
+				hx-indicator="#search-indicator"
+				class="search-input"
+				autofocus
+			/>
+			<span id="search-indicator" class="htmx-indicator">Searching...</span>
+		</div>
+		<div id="search-results">
+			if q == "" {
+				<div class="search-help">
+					<h3>Search syntax</h3>
+					<ul class="search-syntax-list">
+						<li><code>from:alice@example.com</code> — search by sender</li>
+						<li><code>to:bob@example.com</code> — search by recipient</li>
+						<li><code>subject:meeting</code> — search in subject</li>
+						<li><code>label:inbox</code> — filter by label</li>
+						<li><code>has:attachment</code> — messages with attachments</li>
+						<li><code>before:2024-01-01</code> — before date</li>
+						<li><code>after:2023-01-01</code> — after date</li>
+						<li><code>larger:5M</code> — larger than 5 MB</li>
+						<li><code>meeting notes</code> — full-text search</li>
+					</ul>
+				</div>
+			} else if len(results) == 0 {
+				<div class="empty-state">
+					<p>No results for &ldquo;{ q }&rdquo;.</p>
+				</div>
+			} else {
+				<div class="table-meta">
+					{ FormatNum(total) } { Pluralize(total, "result", "results") }
+					if mode == "full-text" {
+						<span class="search-mode-badge">(full-text search)</span>
+					} else {
+						<span class="search-mode-badge">(metadata search)</span>
+					}
+				</div>
+				<table class="data-table messages-table">
+					<thead>
+						<tr>
+							<th>From</th>
+							<th>Subject</th>
+							<th>Date</th>
+							<th>Size</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, msg := range results {
+							<tr
+								class="clickable-row message-row"
+								data-href={ fmt.Sprintf("/messages/%d", msg.ID) }
+								hx-get={ fmt.Sprintf("/messages/%d", msg.ID) }
+								hx-select="#main-content"
+								hx-target="#main-content"
+								hx-swap="outerHTML"
+								hx-replace-url="true"
+							>
+								<td class="col-from" title={ msg.FromEmail }>{ truncateStr(displayFrom(msg.FromName, msg.FromEmail), 30) }</td>
+								<td class="col-subject" title={ msg.Snippet }>{ truncateStr(msg.Subject, 60) }</td>
+								<td class="col-date">{ FormatDate(msg.SentAt) }</td>
+								<td class="col-size">{ FormatBytes(msg.SizeEstimate) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+				@Pagination(baseURL, offset, 50, total)
+			}
+		</div>
+	</div>
+}
