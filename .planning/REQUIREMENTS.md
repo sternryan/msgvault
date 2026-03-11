@@ -106,10 +106,10 @@ Deferred to future release. Tracked but not in current roadmap.
 **Coverage:**
 - v1.1 requirements: 25 total
 - Mapped to phases: 25
-- Complete: 23
-- Pending: 2 (PARITY-07, POLISH-03 → Phase 11)
+- Complete: 25
+- Pending: 0
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-10*
-*Last updated: 2026-03-10 — traceability mapped to phases 6-9*
+*Last updated: 2026-03-11 — all 25 requirements complete across phases 6-11*
