@@ -102,12 +102,15 @@ Plans:
   1. `TestMessageBodyWrapperEndpoint` passes with assertions matching Phase 9's unified toolbar (`email-toolbar`, `closest .email-render-wrapper`)
   2. Thread view lazy-loaded messages use unique IDs (e.g., `email-body-wrapper-{messageID}`) instead of duplicate `id=email-body-wrapper`
   3. `go test ./internal/web/...` passes with no test failures
-**Plans:** 0/1 plans needed
+**Plans:** 1 plan
+
+Plans:
+- [ ] 10-01-PLAN.md — Fix stale test assertions (INT-01) and duplicate DOM IDs in thread lazy-load (INT-02)
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 6 → 7 → 8 → 9
+Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
