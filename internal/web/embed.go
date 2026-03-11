@@ -1,5 +1,3 @@
-//go:build !dev
-
 package web
 
 import (
@@ -7,10 +5,15 @@ import (
 	"io/fs"
 )
 
-//go:embed all:dist
-var distFS embed.FS
+//go:embed static/*
+var staticFS embed.FS
 
-// GetDistFS returns the embedded filesystem containing the frontend build output.
-func GetDistFS() fs.FS {
-	return distFS
+// staticSubFS returns a sub-filesystem rooted at the "static" directory.
+// Used by the server to serve files at /static/*.
+func staticSubFS() fs.FS {
+	sub, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		panic("failed to create static sub-filesystem: " + err.Error())
+	}
+	return sub
 }

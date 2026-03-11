@@ -1,0 +1,105 @@
+package templates
+
+import (
+	"fmt"
+	"github.com/wesm/msgvault/internal/query"
+	"strings"
+)
+
+// Layout renders the base HTML page with navbar, account dropdown, and content area.
+templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64, pendingDeletions int, currentPath string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{ title } - msgvault</title>
+			<link rel="stylesheet" href="/static/style.css"/>
+		</head>
+		<body>
+			<nav class="navbar">
+				<a href="/" class="nav-brand">msgvault</a>
+				<a
+					href="/"
+					class={ "nav-link", templ.KV("active", currentPath == "/") }
+					hx-get="/"
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+				>Dashboard</a>
+				<a
+					href="/messages"
+					class={ "nav-link", templ.KV("active", strings.HasPrefix(currentPath, "/messages")) }
+					hx-get="/messages"
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+				>Messages</a>
+				<a
+					href="/aggregate"
+					class={ "nav-link", templ.KV("active", strings.HasPrefix(currentPath, "/aggregate")) }
+					hx-get="/aggregate"
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+				>Aggregate</a>
+				<a
+					href="/search"
+					class={ "nav-link", templ.KV("active", strings.HasPrefix(currentPath, "/search")) }
+					hx-get="/search"
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+				>Search</a>
+				<a
+					href="/deletions"
+					class={ "nav-link", templ.KV("active", strings.HasPrefix(currentPath, "/deletions")) }
+					hx-get="/deletions"
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+				>
+					Deletions
+					if pendingDeletions > 0 {
+						<span id="deletion-badge" class="badge">{ fmt.Sprintf("%d", pendingDeletions) }</span>
+					}
+				</a>
+				<span class="nav-spacer"></span>
+				<select
+					id="account-filter"
+					name="sourceId"
+					hx-get={ currentPath }
+					hx-trigger="change"
+					hx-target="#main-content"
+					hx-select="#main-content"
+					hx-swap="outerHTML"
+					hx-replace-url="true"
+				>
+					<option value="">All accounts</option>
+					for _, acc := range accounts {
+						<option
+							value={ fmt.Sprintf("%d", acc.ID) }
+							selected?={ activeAccountID != nil && *activeAccountID == acc.ID }
+						>
+							if acc.DisplayName != "" {
+								{ acc.DisplayName }
+							} else {
+								{ acc.Identifier }
+							}
+						</option>
+					}
+				</select>
+			</nav>
+			<main id="main-content">
+				{ children... }
+			</main>
+			<script src="/static/htmx.min.js"></script>
+			<script src="/static/keys.js"></script>
+		</body>
+	</html>
+}

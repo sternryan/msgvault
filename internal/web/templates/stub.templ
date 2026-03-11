@@ -1,0 +1,18 @@
+package templates
+
+import "fmt"
+
+// StubPage renders a placeholder page used by stub handlers.
+templ StubPage(name string) {
+	<h1>{ name }</h1>
+	<p class="empty-state">Coming soon</p>
+}
+
+// ErrorContent renders an error page content block.
+templ ErrorContent(status int, message string) {
+	<div class="empty-state">
+		<h1>{ fmt.Sprintf("%d", status) }</h1>
+		<h3>{ message }</h3>
+		<p><a href="/">Return to Dashboard</a></p>
+	</div>
+}

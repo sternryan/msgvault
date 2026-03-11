@@ -19,7 +19,6 @@ import (
 var (
 	webPort         int
 	webNoBrowser    bool
-	webDev          bool
 	webForceSQL     bool
 	webNoCacheBuild bool
 )
@@ -64,7 +63,7 @@ Press Ctrl+C to stop the server.`,
 			Level: level,
 		}))
 
-		srv := web.NewServer(engine, cfg.AttachmentsDir(), delMgr, webLogger, webDev)
+		srv := web.NewServer(engine, cfg.AttachmentsDir(), delMgr, webLogger)
 
 		addr := fmt.Sprintf("127.0.0.1:%d", webPort)
 		url := fmt.Sprintf("http://%s", addr)
@@ -97,14 +96,13 @@ func openBrowser(url string) {
 	default:
 		return
 	}
-	cmd.Run()
+	cmd.Run() //nolint:errcheck
 }
 
 func init() {
 	rootCmd.AddCommand(webCmd)
 	webCmd.Flags().IntVar(&webPort, "port", 8484, "Port to listen on")
 	webCmd.Flags().BoolVar(&webNoBrowser, "no-browser", false, "Don't auto-open browser")
-	webCmd.Flags().BoolVar(&webDev, "dev", false, "Enable CORS for development")
 	webCmd.Flags().BoolVar(&webForceSQL, "force-sql", false, "Force SQLite queries instead of Parquet")
 	webCmd.Flags().BoolVar(&webNoCacheBuild, "no-cache-build", false, "Skip automatic cache build/update")
 }

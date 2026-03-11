@@ -1,0 +1,685 @@
+/* msgvault — Solarized Dark theme */
+/* Generated for Phase 6 Templ+HTMX rebuild */
+
+:root {
+    --base03: #002b36;
+    --base02: #073642;
+    --base01: #586e75;
+    --base0: #839496;
+    --base1: #93a1a1;
+    --base3: #fdf6e3;
+    --blue: #268bd2;
+    --cyan: #2aa198;
+    --green: #859900;
+    --red: #dc322f;
+    --yellow: #b58900;
+    --orange: #cb4b16;
+    --magenta: #d33682;
+    --violet: #6c71c4;
+}
+
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--base03);
+    color: var(--base0);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+a {
+    color: var(--blue);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* ---- Navbar ---- */
+
+.navbar {
+    display: flex;
+    align-items: center;
+    background-color: var(--base02);
+    padding: 0.5rem 1rem;
+    gap: 1rem;
+    border-bottom: 1px solid var(--base01);
+    flex-wrap: wrap;
+}
+
+.nav-brand {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--base1);
+    margin-right: 0.5rem;
+    text-decoration: none;
+}
+
+.nav-brand:hover {
+    color: var(--blue);
+    text-decoration: none;
+}
+
+.nav-link {
+    color: var(--base1);
+    text-decoration: none;
+    padding: 0.25rem 0;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.nav-link:hover {
+    color: var(--blue);
+    text-decoration: none;
+}
+
+.nav-link.active {
+    color: var(--blue);
+    border-bottom: 2px solid var(--blue);
+}
+
+.nav-spacer {
+    flex: 1;
+}
+
+/* ---- Deletion badge ---- */
+
+.badge {
+    background-color: var(--red);
+    color: var(--base3);
+    border-radius: 50%;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    text-align: center;
+    font-size: 0.75rem;
+    padding: 0.1rem 0.4rem;
+    display: inline-block;
+    line-height: 1rem;
+    margin-left: 0.2rem;
+    vertical-align: middle;
+}
+
+/* ---- Account filter ---- */
+
+#account-filter {
+    background-color: var(--base02);
+    color: var(--base0);
+    border: 1px solid var(--base01);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    margin-left: auto;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+#account-filter:focus {
+    border-color: var(--blue);
+    outline: none;
+}
+
+/* ---- Main content area ---- */
+
+#main-content {
+    padding: 1rem 1.5rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+/* ---- Stat cards (dashboard) ---- */
+
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.stat-card {
+    background-color: var(--base02);
+    border-radius: 6px;
+    padding: 1rem 1.25rem;
+    border: 1px solid var(--base01);
+}
+
+.stat-card .value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--base1);
+    line-height: 1.2;
+}
+
+.stat-card .label {
+    color: var(--base01);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.25rem;
+}
+
+/* ---- Tables ---- */
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th {
+    text-align: left;
+    color: var(--base01);
+    font-weight: 600;
+    padding: 0.35rem 0.75rem;
+    border-bottom: 2px solid var(--base01);
+    white-space: nowrap;
+    font-size: 0.85rem;
+}
+
+td {
+    padding: 0.3rem 0.75rem;
+    border-bottom: 1px solid var(--base02);
+    vertical-align: middle;
+}
+
+tr:hover td {
+    background-color: var(--base02);
+}
+
+tr.row-focused td {
+    background-color: var(--base02);
+    outline: 1px solid var(--blue);
+}
+
+tbody tr {
+    cursor: default;
+}
+
+tbody tr a {
+    color: var(--base0);
+}
+
+tbody tr a:hover {
+    color: var(--blue);
+}
+
+/* ---- Sort headers ---- */
+
+.sort-header {
+    cursor: pointer;
+    user-select: none;
+}
+
+.sort-header:hover {
+    color: var(--base0);
+}
+
+.sort-indicator {
+    color: var(--blue);
+    margin-left: 0.25rem;
+    font-size: 0.75rem;
+}
+
+/* ---- Breadcrumbs ---- */
+
+.breadcrumbs {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--base01);
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+    flex-wrap: wrap;
+}
+
+.breadcrumbs a {
+    color: var(--blue);
+    text-decoration: none;
+}
+
+.breadcrumbs a:hover {
+    text-decoration: underline;
+}
+
+.breadcrumbs .separator {
+    color: var(--base01);
+    font-size: 0.75rem;
+}
+
+.breadcrumbs .separator::before {
+    content: ">";
+}
+
+.breadcrumbs .current {
+    color: var(--base0);
+}
+
+/* ---- Pagination ---- */
+
+.pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 0;
+    color: var(--base01);
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+}
+
+.pagination a {
+    color: var(--blue);
+    text-decoration: none;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--base01);
+    border-radius: 4px;
+}
+
+.pagination a:hover {
+    border-color: var(--blue);
+    text-decoration: none;
+}
+
+.pagination a.disabled {
+    color: var(--base01);
+    pointer-events: none;
+    border-color: var(--base02);
+}
+
+.pagination .page-info {
+    color: var(--base01);
+}
+
+/* ---- Search ---- */
+
+.search-input {
+    width: 100%;
+    background-color: var(--base02);
+    color: var(--base0);
+    border: 1px solid var(--base01);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+    font-family: inherit;
+}
+
+.search-input:focus {
+    border-color: var(--blue);
+    outline: none;
+}
+
+.search-input::placeholder {
+    color: var(--base01);
+}
+
+.filter-input {
+    background-color: var(--base02);
+    color: var(--base0);
+    border: 1px solid var(--base01);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.9rem;
+    font-family: inherit;
+}
+
+.filter-input:focus {
+    border-color: var(--blue);
+    outline: none;
+}
+
+.filter-input::placeholder {
+    color: var(--base01);
+}
+
+/* ---- HTMX loading indicator ---- */
+
+.htmx-indicator {
+    display: none;
+    color: var(--yellow);
+    font-size: 0.85rem;
+    margin-left: 0.5rem;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+    display: inline;
+}
+
+/* ---- Buttons ---- */
+
+.btn {
+    background-color: var(--base02);
+    color: var(--base0);
+    border: 1px solid var(--base01);
+    border-radius: 4px;
+    padding: 0.25rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-family: inherit;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn:hover {
+    border-color: var(--blue);
+    color: var(--blue);
+    text-decoration: none;
+}
+
+.btn-danger {
+    border-color: var(--red);
+    color: var(--red);
+}
+
+.btn-danger:hover {
+    background-color: var(--red);
+    color: var(--base3);
+}
+
+.btn-sm {
+    padding: 0.15rem 0.5rem;
+    font-size: 0.8rem;
+}
+
+/* ---- Deletion staging ---- */
+
+.staged td {
+    opacity: 0.5;
+    text-decoration: line-through;
+}
+
+tr.staged {
+    opacity: 0.5;
+}
+
+/* ---- Empty state ---- */
+
+.empty-state {
+    text-align: center;
+    padding: 3rem;
+    color: var(--base01);
+}
+
+.empty-state h3 {
+    color: var(--base0);
+    margin-bottom: 0.5rem;
+}
+
+/* ---- Help overlay ---- */
+
+.help-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: none;
+    z-index: 100;
+    justify-content: center;
+    align-items: center;
+}
+
+.help-overlay.active {
+    display: flex;
+}
+
+.help-content {
+    background-color: var(--base02);
+    border-radius: 8px;
+    padding: 2rem;
+    max-width: 500px;
+    width: 90%;
+    color: var(--base0);
+    border: 1px solid var(--base01);
+}
+
+.help-content h3 {
+    margin-top: 0;
+    color: var(--base1);
+}
+
+.help-content table {
+    font-size: 0.9rem;
+}
+
+.help-content td {
+    border-bottom: none;
+    padding: 0.2rem 0.5rem;
+}
+
+.help-content .key {
+    font-family: monospace;
+    color: var(--yellow);
+    white-space: nowrap;
+}
+
+/* ---- Message detail ---- */
+
+.message-headers {
+    background-color: var(--base02);
+    padding: 1rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    border: 1px solid var(--base01);
+}
+
+.message-headers .header-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+    font-size: 0.9rem;
+}
+
+.message-headers .header-label {
+    color: var(--base01);
+    min-width: 4rem;
+    flex-shrink: 0;
+}
+
+.message-headers .header-value {
+    color: var(--base0);
+    word-break: break-word;
+}
+
+.message-body {
+    padding: 1rem;
+    white-space: pre-wrap;
+    font-family: monospace;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    overflow-wrap: break-word;
+    background-color: var(--base03);
+    border-radius: 4px;
+    border: 1px solid var(--base02);
+}
+
+.attachment-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.attachment-item {
+    background-color: var(--base02);
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid var(--base01);
+}
+
+.attachment-item .attachment-name {
+    color: var(--base0);
+    flex: 1;
+}
+
+.attachment-item .attachment-size {
+    color: var(--base01);
+    font-size: 0.85rem;
+}
+
+/* ---- Section headers ---- */
+
+h1 {
+    color: var(--base1);
+    font-size: 1.4rem;
+    margin: 0 0 1rem 0;
+    font-weight: 600;
+}
+
+h2 {
+    color: var(--base1);
+    font-size: 1.15rem;
+    margin: 1rem 0 0.5rem 0;
+    font-weight: 600;
+}
+
+h3 {
+    color: var(--base0);
+    font-size: 1rem;
+    margin: 0.75rem 0 0.25rem 0;
+    font-weight: 600;
+}
+
+/* ---- Page-specific layout ---- */
+
+.page-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.page-header h1 {
+    margin: 0;
+}
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+/* ---- View type tabs (aggregate page) ---- */
+
+.view-tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.view-tab {
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    border: 1px solid var(--base01);
+    color: var(--base1);
+    text-decoration: none;
+    font-size: 0.85rem;
+    background-color: var(--base03);
+}
+
+.view-tab:hover {
+    border-color: var(--blue);
+    color: var(--blue);
+    text-decoration: none;
+}
+
+.view-tab.active {
+    background-color: var(--blue);
+    color: var(--base3);
+    border-color: var(--blue);
+}
+
+/* ---- Label pills ---- */
+
+.label-pill {
+    background-color: var(--base02);
+    color: var(--base01);
+    border-radius: 10px;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.75rem;
+    border: 1px solid var(--base01);
+    white-space: nowrap;
+    display: inline-block;
+    margin: 0 0.1rem;
+}
+
+/* ---- Deletions page ---- */
+
+.deletion-manifest {
+    background-color: var(--base02);
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--base01);
+}
+
+.deletion-manifest .manifest-status {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+}
+
+.status-pending { color: var(--yellow); }
+.status-in_progress { color: var(--blue); }
+.status-completed { color: var(--green); }
+.status-failed { color: var(--red); }
+.status-cancelled { color: var(--base01); }
+
+/* ---- Checkbox column ---- */
+
+.checkbox-cell {
+    width: 2rem;
+    text-align: center;
+}
+
+input[type="checkbox"] {
+    accent-color: var(--blue);
+    cursor: pointer;
+}
+
+/* ---- Responsive ---- */
+
+@media (max-width: 768px) {
+    .stat-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .navbar {
+        flex-wrap: wrap;
+    }
+
+    #account-filter {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    #main-content {
+        padding: 0.75rem 1rem;
+    }
+
+    .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .view-tabs {
+        overflow-x: auto;
+        padding-bottom: 0.25rem;
+    }
+
+    table {
+        font-size: 0.8rem;
+    }
+
+    th, td {
+        padding: 0.25rem 0.4rem;
+    }
+}
