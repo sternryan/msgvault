@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Phase 7 context gathered
-last_updated: "2026-03-11T05:49:17.156Z"
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-03-11T06:29:02.496Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 7
+  completed_plans: 6
   percent: 20
 ---
 
@@ -51,6 +51,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 | Phase 06-foundation P03 | 6min | 2 tasks | 8 files |
 | Phase 06-foundation P04 | 5 | 2 tasks | 10 files |
 | Phase 06-foundation P05 | 3min | 2 tasks | 36 files |
+| Phase 07-email-rendering P01 | 5min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,9 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Phase 06-04]: Account filter uses JS URL manipulation (not HTMX hx-get): setupAccountFilter() preserves all existing URL params when changing sourceId
 - [Phase 06-04]: layout.templ always renders deletion-badge span (empty when count=0) so OOB swap can clear it
 - [Phase 06-foundation]: serve.go rewritten as scheduler-only daemon — JSON API removed since React SPA is gone; templ-generate is dev-only target since _templ.go files are committed to repo
+- [Phase 07-01]: bluemonday AllowUnsafe(true) required for style blocks; security depends on sandboxed iframe, NOT sanitizer alone
+- [Phase 07-01]: CID substitution must run before bluemonday sanitization — bluemonday strips cid: URL scheme
+- [Phase 07-01]: content_id migration uses PRAGMA table_info check before ALTER TABLE — safe for existing databases
 
 ### Pending Todos
 
@@ -86,6 +90,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T05:49:17.154Z
-Stopped at: Phase 7 context gathered
-Resume file: .planning/phases/07-email-rendering/07-CONTEXT.md
+Last session: 2026-03-11T06:29:02.494Z
+Stopped at: Completed 07-01-PLAN.md
+Resume file: None

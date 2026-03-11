@@ -28,10 +28,10 @@ Requirements for the Web UI rebuild. Each maps to roadmap phases.
 
 ### Email Rendering
 
-- [ ] **RENDER-01**: Email HTML bodies are sanitized server-side with bluemonday before rendering (XSS prevention)
+- [x] **RENDER-01**: Email HTML bodies are sanitized server-side with bluemonday before rendering (XSS prevention)
 - [ ] **RENDER-02**: Email HTML bodies render in sandboxed iframes so email CSS cannot break application layout
-- [ ] **RENDER-03**: CID image references in emails are substituted with local attachment URLs server-side
-- [ ] **RENDER-04**: External images in emails are blocked by default with an opt-in toggle to load them
+- [x] **RENDER-03**: CID image references in emails are substituted with local attachment URLs server-side
+- [x] **RENDER-04**: External images in emails are blocked by default with an opt-in toggle to load them
 
 ### Thread View
 
@@ -90,10 +90,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | PARITY-06 | Phase 6 | Complete |
 | PARITY-07 | Phase 6 | Complete |
 | PARITY-08 | Phase 6 | Complete |
-| RENDER-01 | Phase 7 | Pending |
+| RENDER-01 | Phase 7 | Complete |
 | RENDER-02 | Phase 7 | Pending |
-| RENDER-03 | Phase 7 | Pending |
-| RENDER-04 | Phase 7 | Pending |
+| RENDER-03 | Phase 7 | Complete |
+| RENDER-04 | Phase 7 | Complete |
 | THREAD-01 | Phase 8 | Pending |
 | THREAD-02 | Phase 8 | Pending |
 | THREAD-03 | Phase 8 | Pending |
