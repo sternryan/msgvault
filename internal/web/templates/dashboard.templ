@@ -1,0 +1,104 @@
+package templates
+
+import (
+	"fmt"
+	"github.com/wesm/msgvault/internal/query"
+)
+
+// DashboardPage renders the dashboard with archive stats, top senders, and top domains.
+templ DashboardPage(stats *query.TotalStats, accounts []query.AccountInfo, topSenders, topDomains []query.AggregateRow) {
+	<div class="page-content">
+		if stats == nil || stats.MessageCount == 0 {
+			<div class="empty-state">
+				<p>No messages archived yet. Run <code>msgvault sync-full</code> to get started.</p>
+			</div>
+		} else {
+			<div class="stat-grid">
+				<div class="stat-card">
+					<div class="stat-label">Total Messages</div>
+					<div class="stat-value">{ FormatNum(stats.MessageCount) }</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label">Accounts</div>
+					<div class="stat-value">{ fmt.Sprintf("%d", len(accounts)) }</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label">Total Size</div>
+					<div class="stat-value">{ FormatBytes(stats.TotalSize) }</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label">Attachments</div>
+					<div class="stat-value">{ FormatNum(stats.AttachmentCount) }</div>
+				</div>
+			</div>
+			<div class="top-lists">
+				<div class="top-list">
+					<h3 class="top-list-title">Top Senders</h3>
+					if len(topSenders) == 0 {
+						<p class="empty-state-inline">No sender data available.</p>
+					} else {
+						<table class="data-table">
+							<thead>
+								<tr>
+									<th>Email</th>
+									<th class="col-num">Count</th>
+									<th class="col-num">Size</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, row := range topSenders {
+									<tr
+										class="clickable-row"
+										data-href={ fmt.Sprintf("/aggregate/drilldown?groupBy=senders&filterKey=%s", row.Key) }
+										hx-get={ fmt.Sprintf("/aggregate/drilldown?groupBy=senders&filterKey=%s", row.Key) }
+										hx-select="#main-content"
+										hx-target="#main-content"
+										hx-swap="outerHTML"
+										hx-replace-url="true"
+									>
+										<td class="col-key">{ row.Key }</td>
+										<td class="col-num">{ FormatNum(row.Count) }</td>
+										<td class="col-num">{ FormatBytes(row.TotalSize) }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					}
+				</div>
+				<div class="top-list">
+					<h3 class="top-list-title">Top Domains</h3>
+					if len(topDomains) == 0 {
+						<p class="empty-state-inline">No domain data available.</p>
+					} else {
+						<table class="data-table">
+							<thead>
+								<tr>
+									<th>Domain</th>
+									<th class="col-num">Count</th>
+									<th class="col-num">Size</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, row := range topDomains {
+									<tr
+										class="clickable-row"
+										data-href={ fmt.Sprintf("/aggregate/drilldown?groupBy=domains&filterKey=%s", row.Key) }
+										hx-get={ fmt.Sprintf("/aggregate/drilldown?groupBy=domains&filterKey=%s", row.Key) }
+										hx-select="#main-content"
+										hx-target="#main-content"
+										hx-swap="outerHTML"
+										hx-replace-url="true"
+									>
+										<td class="col-key">{ row.Key }</td>
+										<td class="col-num">{ FormatNum(row.Count) }</td>
+										<td class="col-num">{ FormatBytes(row.TotalSize) }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					}
+				</div>
+			</div>
+		}
+	</div>
+}
