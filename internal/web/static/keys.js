@@ -1,11 +1,29 @@
 // keys.js — full keyboard shortcut handler for msgvault web UI
 
-// Iframe auto-resize: listen for postMessage from email body iframe
+// Iframe auto-resize: listen for postMessage from email body iframe(s)
+// Handles both single iframe (message detail) and multiple iframes (thread view)
 window.addEventListener('message', function(e) {
     if (e.data && e.data.type === 'msgvault-resize') {
-        var frame = document.getElementById('email-body-frame');
-        if (frame) {
-            frame.style.height = (e.data.height + 20) + 'px';
+        // Try to find the specific iframe that sent this message
+        var frames = document.querySelectorAll('.email-iframe');
+        var matched = false;
+        for (var i = 0; i < frames.length; i++) {
+            try {
+                if (frames[i].contentWindow === e.source) {
+                    frames[i].style.height = (e.data.height + 20) + 'px';
+                    matched = true;
+                    break;
+                }
+            } catch (ex) {
+                // Cross-origin: can't access contentWindow, skip
+            }
+        }
+        // Fallback: if no match (e.g. single iframe without class), try by ID
+        if (!matched) {
+            var frame = document.getElementById('email-body-frame');
+            if (frame) {
+                frame.style.height = (e.data.height + 20) + 'px';
+            }
         }
     }
 });
@@ -61,7 +79,25 @@ window.addEventListener('message', function(e) {
                 reverseSortDir();
                 break;
             case 't':
-                navigateToTimeView();
+                // On message detail page: navigate to thread view
+                // On other pages: navigate to time view (existing behavior)
+                if (window.location.pathname.match(/^\/messages\/\d+$/)) {
+                    navigateToThread();
+                } else {
+                    navigateToTimeView();
+                }
+                break;
+            case 'n':
+                if (window.location.pathname.startsWith('/threads/')) {
+                    navigateThreadMessage(1);
+                    e.preventDefault();
+                }
+                break;
+            case 'p':
+                if (window.location.pathname.startsWith('/threads/')) {
+                    navigateThreadMessage(-1);
+                    e.preventDefault();
+                }
                 break;
             case 'a':
                 focusAccountFilter();
@@ -89,10 +125,12 @@ window.addEventListener('message', function(e) {
     // across all pages, which HTMX's native hx-get approach cannot do without duplicating params.
     document.addEventListener('DOMContentLoaded', function () {
         setupAccountFilter();
+        setupThreadHighlight();
     });
     // Re-setup after HTMX swaps (in case layout is re-rendered)
     document.body.addEventListener('htmx:afterSettle', function () {
         setupAccountFilter();
+        setupThreadHighlight();
     });
 
     function setupAccountFilter() {
@@ -243,6 +281,68 @@ window.addEventListener('message', function(e) {
         }
     }
 
+    function navigateToThread() {
+        var link = document.getElementById('view-thread-link');
+        if (link) {
+            var href = link.getAttribute('href');
+            if (href) {
+                htmx.ajax('GET', href, {
+                    target: '#main-content',
+                    select: '#main-content',
+                    swap: 'outerHTML'
+                }).then(function() {
+                    history.pushState({}, '', href);
+                });
+            }
+        }
+    }
+
+    function navigateThreadMessage(delta) {
+        var msgs = Array.from(document.querySelectorAll('.thread-message[data-msg-id]'));
+        if (!msgs.length) return;
+
+        var focusedIdx = msgs.findIndex(function(el) {
+            return el.classList.contains('thread-focused');
+        });
+
+        // If no current focus, start from the open/latest message
+        if (focusedIdx < 0) {
+            focusedIdx = msgs.findIndex(function(el) { return el.open; });
+            if (focusedIdx < 0) focusedIdx = msgs.length - 1;
+        }
+
+        // Remove current focus
+        msgs[focusedIdx].classList.remove('thread-focused');
+
+        // Calculate next with wrap-around
+        var nextIdx = (focusedIdx + delta + msgs.length) % msgs.length;
+        var nextMsg = msgs[nextIdx];
+
+        nextMsg.classList.add('thread-focused');
+        nextMsg.open = true;  // expand if collapsed
+        nextMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function setupThreadHighlight() {
+        var container = document.getElementById('thread-container');
+        if (!container) return;
+        var highlightId = container.dataset.highlight;
+        if (!highlightId || highlightId === '0') return;
+        // Only run once per container load
+        if (container.dataset.highlightApplied) return;
+        container.dataset.highlightApplied = 'true';
+
+        var el = document.getElementById('msg-' + highlightId);
+        if (el) {
+            el.open = true;
+            el.classList.add('thread-focused');
+            // Delay to let iframe height settle before scrolling
+            setTimeout(function() {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 150);
+        }
+    }
+
     function toggleHelp() {
         var overlay = document.getElementById('help-overlay');
         if (!overlay) {
@@ -260,7 +360,9 @@ window.addEventListener('message', function(e) {
                 '<tr><td><kbd>Tab</kbd></td><td>Cycle view types</td></tr>' +
                 '<tr><td><kbd>s</kbd></td><td>Cycle sort field</td></tr>' +
                 '<tr><td><kbd>r</kbd></td><td>Reverse sort</td></tr>' +
-                '<tr><td><kbd>t</kbd></td><td>Time view</td></tr>' +
+                '<tr><td><kbd>t</kbd></td><td>Time view / Thread (on message)</td></tr>' +
+                '<tr><td><kbd>n</kbd></td><td>Next thread message</td></tr>' +
+                '<tr><td><kbd>p</kbd></td><td>Previous thread message</td></tr>' +
                 '<tr><td><kbd>a</kbd></td><td>Account filter</td></tr>' +
                 '<tr><td><kbd>/</kbd></td><td>Search</td></tr>' +
                 '<tr><td><kbd>?</kbd></td><td>Toggle help</td></tr>' +
