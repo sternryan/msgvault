@@ -55,7 +55,8 @@ templ Pagination(baseURL string, offset, limit int, total int64) {
 // baseURL is the path+params WITHOUT sortField/sortDir/offset.
 templ SortHeader(label, field, currentField, currentDir, baseURL string) {
 	<th
-		class="sortable-header"
+		class={ "sortable-header", templ.KV("active", field == currentField) }
+		data-sort-field={ field }
 		hx-get={ sortURL(baseURL, field, currentField, currentDir) }
 		hx-select="#main-content"
 		hx-target="#main-content"
