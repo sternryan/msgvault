@@ -23,7 +23,7 @@ Phases 1-5 delivered the complete offline Gmail archiver: full/incremental sync,
 ## Phases (v1.1)
 
 - [x] **Phase 6: Foundation** - Adopt PR #176's Templ + HTMX UI, achieve full parity with React SPA, produce single `go build` binary with no npm (completed 2026-03-11)
-- [ ] **Phase 7: Email Rendering** - Sanitize and sandbox HTML email bodies; serve inline attachments with CID substitution and external image blocking
+- [x] **Phase 7: Email Rendering** - Sanitize and sandbox HTML email bodies; serve inline attachments with CID substitution and external image blocking (completed 2026-03-11)
 - [ ] **Phase 8: Thread View** - Full conversation view with collapsible messages, inline images, and keyboard navigation
 - [ ] **Phase 9: Polish** - Text/HTML toggle, loading indicators, CSS bar chart for dashboard, and final validation pass
 
@@ -57,7 +57,7 @@ Plans:
   2. A malicious `<script>` tag in an email body does not execute in the browser (bluemonday strips it server-side before render)
   3. CID image references in an email body display as inline images served from the local attachment store
   4. External images in email bodies are hidden by default; clicking an opt-in toggle reveals them without a page reload
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 07-01-PLAN.md — Schema migration (content_id), data layer updates, bluemonday sanitization pipeline with CID substitution and external image blocking
@@ -93,6 +93,6 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 |-------|-----------|----------------|--------|-----------|
 | 1-5. Core Archive | v1.0 | - | Complete | 2026-03-10 |
 | 6. Foundation | 5/5 | Complete   | 2026-03-11 | - |
-| 7. Email Rendering | 1/2 | In Progress|  | - |
+| 7. Email Rendering | 2/2 | Complete   | 2026-03-11 | - |
 | 8. Thread View | v1.1 | 0/TBD | Not started | - |
 | 9. Polish | v1.1 | 0/TBD | Not started | - |
