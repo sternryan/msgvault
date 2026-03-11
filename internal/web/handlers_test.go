@@ -469,13 +469,13 @@ func TestMessageBodyWrapperEndpoint(t *testing.T) {
 	if !strings.Contains(bodyStr, `id="email-body-wrapper"`) {
 		t.Errorf("GET /messages/1/body-wrapper: body does not contain email-body-wrapper div")
 	}
-	if !strings.Contains(bodyStr, "email-images-banner") {
-		t.Errorf("GET /messages/1/body-wrapper: body does not contain email-images-banner")
+	if !strings.Contains(bodyStr, "email-toolbar") {
+		t.Errorf("GET /messages/1/body-wrapper: body does not contain email-toolbar")
 	}
 	if !strings.Contains(bodyStr, "hx-get") {
 		t.Errorf("GET /messages/1/body-wrapper: body does not contain hx-get attribute")
 	}
-	if !strings.Contains(bodyStr, `hx-target="#email-body-wrapper"`) {
+	if !strings.Contains(bodyStr, `hx-target="closest .email-render-wrapper"`) {
 		t.Errorf("GET /messages/1/body-wrapper: body does not contain hx-target attribute")
 	}
 	if !strings.Contains(bodyStr, `hx-swap="outerHTML"`) {
@@ -509,6 +509,35 @@ func TestMessageBodyWrapperShowImages(t *testing.T) {
 	}
 	if !strings.Contains(bodyStr, "showImages=true") {
 		t.Errorf("GET /messages/1/body-wrapper?showImages=true: iframe src should contain showImages=true")
+	}
+}
+
+// TestBodyWrapperWithWrapperIDParam verifies body-wrapper respects the wrapperID query param.
+func TestBodyWrapperWithWrapperIDParam(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/messages/1/body-wrapper?wrapperID=email-body-wrapper-99")
+	if err != nil {
+		t.Fatalf("GET /messages/1/body-wrapper?wrapperID=email-body-wrapper-99: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /messages/1/body-wrapper?wrapperID=email-body-wrapper-99: expected status 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, `id="email-body-wrapper-99"`) {
+		t.Errorf("GET /messages/1/body-wrapper?wrapperID=email-body-wrapper-99: body does not contain id=\"email-body-wrapper-99\"")
+	}
+	if strings.Contains(bodyStr, `id="email-body-wrapper"`) {
+		t.Errorf("GET /messages/1/body-wrapper?wrapperID=email-body-wrapper-99: body should NOT contain standalone id=\"email-body-wrapper\"")
+	}
+	if !strings.Contains(bodyStr, "email-toolbar") {
+		t.Errorf("GET /messages/1/body-wrapper?wrapperID=email-body-wrapper-99: body does not contain email-toolbar")
 	}
 }
 
