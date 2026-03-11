@@ -77,6 +77,7 @@ type AttachmentInfo struct {
 	MimeType    string `json:"mimeType"`
 	Size        int64  `json:"size"`
 	ContentHash string `json:"contentHash,omitempty"`
+	ContentID   string `json:"contentId,omitempty"`
 }
 
 // ViewType represents the type of aggregate view.

@@ -302,6 +302,6 @@ func storeAttachment(
 	}
 	return st.UpsertAttachment(
 		messageID, att.Filename, att.ContentType,
-		storagePath, att.ContentHash, len(att.Content),
+		storagePath, att.ContentHash, att.ContentID, len(att.Content),
 	)
 }

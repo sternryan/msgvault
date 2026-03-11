@@ -119,7 +119,7 @@ func fetchParticipantsShared(ctx context.Context, db *sql.DB, tablePrefix string
 // tablePrefix is "" for direct SQLite or "sqlite_db." for DuckDB's sqlite_scan.
 func fetchAttachmentsShared(ctx context.Context, db *sql.DB, tablePrefix string, msg *MessageDetail) error {
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT id, COALESCE(filename, ''), COALESCE(mime_type, ''), COALESCE(size, 0), COALESCE(content_hash, '')
+		SELECT id, COALESCE(filename, ''), COALESCE(mime_type, ''), COALESCE(size, 0), COALESCE(content_hash, ''), COALESCE(content_id, '')
 		FROM %sattachments
 		WHERE message_id = ?
 	`, tablePrefix), msg.ID)
@@ -130,7 +130,7 @@ func fetchAttachmentsShared(ctx context.Context, db *sql.DB, tablePrefix string,
 
 	for rows.Next() {
 		var att AttachmentInfo
-		if err := rows.Scan(&att.ID, &att.Filename, &att.MimeType, &att.Size, &att.ContentHash); err != nil {
+		if err := rows.Scan(&att.ID, &att.Filename, &att.MimeType, &att.Size, &att.ContentHash, &att.ContentID); err != nil {
 			return err
 		}
 		msg.Attachments = append(msg.Attachments, att)

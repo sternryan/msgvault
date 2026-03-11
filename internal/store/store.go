@@ -280,6 +280,39 @@ func (s *Store) FTS5Available() bool {
 	return s.fts5Available
 }
 
+// migrateAddContentID adds the content_id column to attachments if it doesn't exist.
+// This handles existing databases created before Plan 07-01.
+func (s *Store) migrateAddContentID() error {
+	rows, err := s.db.Query(`PRAGMA table_info(attachments)`)
+	if err != nil {
+		return fmt.Errorf("pragma table_info(attachments): %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dflt interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan table_info: %w", err)
+		}
+		if name == "content_id" {
+			return nil // already exists
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table_info: %w", err)
+	}
+
+	_, err = s.db.Exec(`ALTER TABLE attachments ADD COLUMN content_id TEXT`)
+	if err != nil {
+		return fmt.Errorf("alter table add content_id: %w", err)
+	}
+	return nil
+}
+
 // InitSchema initializes the database schema.
 // This creates all tables if they don't exist.
 func (s *Store) InitSchema() error {
@@ -291,6 +324,11 @@ func (s *Store) InitSchema() error {
 
 	if _, err := s.db.Exec(string(schema)); err != nil {
 		return fmt.Errorf("execute schema.sql: %w", err)
+	}
+
+	// Migrate existing databases to add content_id column if missing
+	if err := s.migrateAddContentID(); err != nil {
+		return fmt.Errorf("migrate content_id: %w", err)
 	}
 
 	// Try to load and execute SQLite-specific schema (FTS5)

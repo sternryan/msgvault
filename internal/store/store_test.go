@@ -416,17 +416,42 @@ func TestStore_Attachment(t *testing.T) {
 		WithAttachmentCount(1).
 		Create(t, f.Store)
 
-	err := f.Store.UpsertAttachment(msgID, "document.pdf", "application/pdf", "/path/to/file", "abc123hash", 1024)
+	err := f.Store.UpsertAttachment(msgID, "document.pdf", "application/pdf", "/path/to/file", "abc123hash", "", 1024)
 	testutil.MustNoErr(t, err, "UpsertAttachment()")
 
 	// Upsert same attachment (should not error, dedupe by content_hash)
-	err = f.Store.UpsertAttachment(msgID, "document.pdf", "application/pdf", "/path/to/file", "abc123hash", 1024)
+	err = f.Store.UpsertAttachment(msgID, "document.pdf", "application/pdf", "/path/to/file", "abc123hash", "", 1024)
 	testutil.MustNoErr(t, err, "UpsertAttachment() duplicate")
 
 	stats, err := f.Store.GetStats()
 	testutil.MustNoErr(t, err, "GetStats")
 	if stats.AttachmentCount != 1 {
 		t.Errorf("AttachmentCount = %d, want 1", stats.AttachmentCount)
+	}
+}
+
+func TestUpsertAttachment_ContentID(t *testing.T) {
+	f := storetest.New(t)
+
+	msgID := storetest.NewMessage(f.Source.ID, f.ConvID).
+		WithSourceMessageID("msg-cid-1").
+		WithAttachmentCount(1).
+		Create(t, f.Store)
+
+	// Insert attachment with a content_id
+	err := f.Store.UpsertAttachment(msgID, "photo.jpg", "image/jpeg", "/path/photo.jpg", "deadbeef", "<img001@example.com>", 2048)
+	testutil.MustNoErr(t, err, "UpsertAttachment() with contentID")
+
+	// Verify content_id was stored
+	var storedContentID string
+	err = f.Store.DB().QueryRow(
+		`SELECT COALESCE(content_id, '') FROM attachments WHERE message_id = ? AND content_hash = ?`,
+		msgID, "deadbeef",
+	).Scan(&storedContentID)
+	testutil.MustNoErr(t, err, "query content_id")
+
+	if storedContentID != "<img001@example.com>" {
+		t.Errorf("content_id = %q, want %q", storedContentID, "<img001@example.com>")
 	}
 }
 
