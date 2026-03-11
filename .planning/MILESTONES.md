@@ -1,5 +1,26 @@
 # Milestones: msgvault
 
+## v1.1 Web UI Rebuild (Templ + HTMX) (Shipped: 2026-03-11)
+
+**Phases:** 6 (Phases 6-11) | **Plans:** 13 | **Tasks:** 27
+**Timeline:** 42 days (2026-01-28 → 2026-03-11)
+**Files changed:** 135 | **Lines:** +18,958 / -11,339
+**Web package:** 8,654 LOC (Go + Templ)
+**Requirements:** 25/25 satisfied | **Audit:** Passed
+
+**Key accomplishments:**
+- Replaced React SPA with server-rendered Templ + HTMX — single `go build` binary, no npm/Node.js
+- HTML email rendering with bluemonday sanitization, sandboxed iframes, CID image substitution, external image blocking with opt-in toggle
+- Thread/conversation view with chronological messages, collapsible via `<details>`, lazy-load bodies, n/p/t keyboard navigation
+- Text/HTML body toggle per message with URL persistence, CSS-only time-series bar chart on dashboard
+- Full keyboard navigation: j/k row nav, s/r sort cycling, Enter/Esc/Tab/a shortcuts across all pages
+- Loading indicators on all 42 HTMX trigger points across 10 templates
+- Deleted React SPA (`web/`), JSON API (`internal/api/`), and all npm/Vite artifacts
+
+**Archive:** `milestones/v1.1-ROADMAP.md`, `milestones/v1.1-REQUIREMENTS.md`, `milestones/v1.1-MILESTONE-AUDIT.md`
+
+---
+
 ## v1.0 — Core Archive & Search
 
 **Status:** Complete
