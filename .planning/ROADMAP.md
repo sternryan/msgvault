@@ -72,7 +72,11 @@ Plans:
   2. All messages in a conversation appear chronologically on one page, with the most recent message pre-expanded and earlier messages collapsed
   3. Expanding a collapsed message loads its body without a full page reload; inline images display directly, other attachments appear as download links
   4. User can move between messages in the thread using `n` (next) and `p` (previous) keyboard shortcuts
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — Thread handler, route, templ template, and collapsible message rendering with lazy-load iframes
+- [ ] 08-02-PLAN.md — "View thread" link on message detail, t/n/p keyboard shortcuts, highlight/scroll, thread CSS
 
 ### Phase 9: Polish
 **Goal**: The web UI is complete — text/HTML body toggle works, the dashboard chart displays time-series data, loading indicators appear during partial updates, and all React SPA artifacts are confirmed absent
@@ -94,5 +98,5 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 | 1-5. Core Archive | v1.0 | - | Complete | 2026-03-10 |
 | 6. Foundation | 5/5 | Complete   | 2026-03-11 | - |
 | 7. Email Rendering | 2/2 | Complete   | 2026-03-11 | - |
-| 8. Thread View | v1.1 | 0/TBD | Not started | - |
+| 8. Thread View | v1.1 | 0/2 | Planning complete | - |
 | 9. Polish | v1.1 | 0/TBD | Not started | - |
