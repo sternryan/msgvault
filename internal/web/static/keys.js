@@ -162,7 +162,7 @@ window.addEventListener('message', function(e) {
     });
 
     function moveRow(delta) {
-        var rows = document.querySelectorAll('[data-row]');
+        var rows = document.querySelectorAll('[data-href]');
         if (!rows.length) return;
         if (currentRow >= 0 && currentRow < rows.length) {
             rows[currentRow].classList.remove('row-focused');
@@ -217,9 +217,9 @@ window.addEventListener('message', function(e) {
 
     function cycleSortField() {
         // Find sort header links and cycle through them
-        var sortLinks = document.querySelectorAll('.sort-header[data-sort-field]');
+        var sortLinks = document.querySelectorAll('.sortable-header[data-sort-field]');
         if (!sortLinks.length) return;
-        var activeField = document.querySelector('.sort-header.active');
+        var activeField = document.querySelector('.sortable-header.active');
         var activeIdx = -1;
         sortLinks.forEach(function (link, i) {
             if (link === activeField) activeIdx = i;
@@ -233,7 +233,7 @@ window.addEventListener('message', function(e) {
 
     function reverseSortDir() {
         // Find the active sort header and click its reverse link
-        var activeSort = document.querySelector('.sort-header.active');
+        var activeSort = document.querySelector('.sortable-header.active');
         if (activeSort) {
             activeSort.click();
         }
