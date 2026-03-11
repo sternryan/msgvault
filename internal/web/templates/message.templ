@@ -7,7 +7,8 @@ import (
 )
 
 // MessageDetailPage renders a full message view with headers, body, and attachments.
-templ MessageDetailPage(msg *query.MessageDetail) {
+// format is "text" for plain text view, "" or "html" for HTML iframe view.
+templ MessageDetailPage(msg *query.MessageDetail, format string) {
 	<div class="page-content">
 		<a
 			class="back-link"
@@ -67,15 +68,48 @@ templ MessageDetailPage(msg *query.MessageDetail) {
 				</dl>
 			</div>
 			<div class="message-body">
-				if msg.BodyHTML != "" {
+				if format == "text" && msg.BodyText != "" {
 					<div id="email-body-wrapper" class="email-render-wrapper">
-						<div class="email-images-banner">
-							<span>External images blocked.</span>
-							<a href="#"
-								hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?showImages=true", msg.ID) }
-								hx-target="#email-body-wrapper"
-								hx-swap="outerHTML">Load images</a>
-						</div>
+						if msg.BodyHTML != "" {
+							<div class="email-toolbar">
+								<span class="email-toolbar-btn active">Text</span>
+								<a class="email-toolbar-btn" href="#"
+									hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?format=html", msg.ID) }
+									hx-target="#email-body-wrapper"
+									hx-swap="outerHTML"
+									hx-replace-url={ fmt.Sprintf("/messages/%d?format=html", msg.ID) }
+								>HTML</a>
+							</div>
+						}
+						<pre class="body-text-pre">{ msg.BodyText }</pre>
+					</div>
+				} else if msg.BodyHTML != "" {
+					<div id="email-body-wrapper" class="email-render-wrapper">
+						if msg.BodyText != "" {
+							<div class="email-toolbar">
+								<a class="email-toolbar-btn" href="#"
+									hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?format=text", msg.ID) }
+									hx-target="#email-body-wrapper"
+									hx-swap="outerHTML"
+									hx-replace-url={ fmt.Sprintf("/messages/%d?format=text", msg.ID) }
+								>Text</a>
+								<span class="email-toolbar-btn active">HTML</span>
+								<span class="email-toolbar-sep">&middot;</span>
+								<span>External images blocked.</span>
+								<a href="#"
+									hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?showImages=true", msg.ID) }
+									hx-target="#email-body-wrapper"
+									hx-swap="outerHTML">Load images</a>
+							</div>
+						} else {
+							<div class="email-images-banner">
+								<span>External images blocked.</span>
+								<a href="#"
+									hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?showImages=true", msg.ID) }
+									hx-target="#email-body-wrapper"
+									hx-swap="outerHTML">Load images</a>
+							</div>
+						}
 						<iframe
 							id="email-body-frame"
 							src={ templ.SafeURL(fmt.Sprintf("/messages/%d/body", msg.ID)) }
@@ -86,7 +120,7 @@ templ MessageDetailPage(msg *query.MessageDetail) {
 						></iframe>
 					</div>
 				} else if msg.BodyText != "" {
-					<pre class="body-text">{ msg.BodyText }</pre>
+					<pre class="body-text-pre">{ msg.BodyText }</pre>
 				} else {
 					<p class="body-empty">No message body available.</p>
 				}

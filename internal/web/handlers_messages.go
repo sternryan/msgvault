@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 	"strconv"
 
@@ -82,9 +83,10 @@ img[src=""]:after { content: attr(alt); font-size: 12px; color: #666; }
 </script></body></html>`, sanitized)
 }
 
-// messageBodyWrapper returns an HTMX-swappable fragment containing the iframe
-// wrapper div. Used by "Load images" toggle to replace the wrapper (with banner
-// and blocked iframe) with a new wrapper (no banner, showImages iframe).
+// messageBodyWrapper returns an HTMX-swappable fragment containing the email
+// body. Supports ?format=text (plain text pre block) and ?format=html (default,
+// iframe with optional showImages). Also handles ?showImages=true for the
+// "Load images" toggle within the HTML view.
 func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -106,40 +108,137 @@ func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	format := r.URL.Query().Get("format")
 	showImages := r.URL.Query().Get("showImages") == "true"
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	if showImages {
-		// No banner — iframe src includes showImages=true
-		fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">
-    <iframe id="email-body-frame"
-        src="/messages/%d/body?showImages=true"
-        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-        class="email-iframe"
-        scrolling="no"
-        frameborder="0"
-    ></iframe>
-</div>`, id)
-	} else {
-		// Include the external images banner above the iframe
-		fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">
-    <div class="email-images-banner">
-        <span>External images blocked.</span>
-        <a href="#"
-           hx-get="/messages/%d/body-wrapper?showImages=true"
-           hx-target="#email-body-wrapper"
-           hx-swap="outerHTML">Load images</a>
-    </div>
-    <iframe id="email-body-frame"
-        src="/messages/%d/body"
-        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-        class="email-iframe"
-        scrolling="no"
-        frameborder="0"
-    ></iframe>
-</div>`, id, id)
+	hasBothFormats := msg.BodyText != "" && msg.BodyHTML != ""
+
+	if format == "text" && msg.BodyText != "" {
+		// Text view: toolbar (Text active) + pre block, no iframe/CSP
+		htmlBtn := ""
+		if hasBothFormats {
+			htmlBtn = fmt.Sprintf(
+				`<a class="email-toolbar-btn" href="#"`+
+					` hx-get="/messages/%d/body-wrapper?format=html"`+
+					` hx-target="closest .email-render-wrapper"`+
+					` hx-swap="outerHTML"`+
+					` hx-replace-url="/messages/%d?format=html">HTML</a>`,
+				id, id)
+		}
+		fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+			`<div class="email-toolbar">`+
+			`<span class="email-toolbar-btn active">Text</span>`+
+			`%s`+
+			`</div>`+
+			`<pre class="body-text-pre">%s</pre>`+
+			`</div>`,
+			htmlBtn,
+			html.EscapeString(msg.BodyText))
+		return
 	}
+
+	// HTML view (default): toolbar (if both formats) + images banner + iframe
+	if msg.BodyHTML != "" {
+		toolbarHTML := ""
+		if hasBothFormats {
+			toolbarHTML = fmt.Sprintf(
+				`<div class="email-toolbar">`+
+					`<a class="email-toolbar-btn" href="#"`+
+					` hx-get="/messages/%d/body-wrapper?format=text"`+
+					` hx-target="closest .email-render-wrapper"`+
+					` hx-swap="outerHTML"`+
+					` hx-replace-url="/messages/%d?format=text">Text</a>`+
+					`<span class="email-toolbar-btn active">HTML</span>`+
+					`<span class="email-toolbar-sep">&middot;</span>`+
+					`<span>External images blocked.</span>`+
+					`<a href="#"`+
+					` hx-get="/messages/%d/body-wrapper?showImages=true"`+
+					` hx-target="closest .email-render-wrapper"`+
+					` hx-swap="outerHTML">Load images</a>`+
+					`</div>`,
+				id, id, id)
+		}
+
+		if showImages {
+			if hasBothFormats {
+				// Toolbar without images banner (images already loaded)
+				toolbarHTML = fmt.Sprintf(
+					`<div class="email-toolbar">`+
+						`<a class="email-toolbar-btn" href="#"`+
+						` hx-get="/messages/%d/body-wrapper?format=text"`+
+						` hx-target="closest .email-render-wrapper"`+
+						` hx-swap="outerHTML"`+
+						` hx-replace-url="/messages/%d?format=text">Text</a>`+
+						`<span class="email-toolbar-btn active">HTML</span>`+
+						`</div>`,
+					id, id)
+			}
+			fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+				`%s`+
+				`<iframe id="email-body-frame"`+
+				` src="/messages/%d/body?showImages=true"`+
+				` sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`+
+				` class="email-iframe"`+
+				` scrolling="no"`+
+				` frameborder="0"`+
+				`></iframe>`+
+				`</div>`,
+				toolbarHTML, id)
+		} else {
+			bannerHTML := fmt.Sprintf(
+				`<div class="email-images-banner">`+
+					`<span>External images blocked.</span>`+
+					`<a href="#"`+
+					` hx-get="/messages/%d/body-wrapper?showImages=true"`+
+					` hx-target="closest .email-render-wrapper"`+
+					` hx-swap="outerHTML">Load images</a>`+
+					`</div>`,
+				id)
+			if hasBothFormats {
+				// Toolbar unifies format toggle + images banner — no separate banner
+				bannerHTML = ""
+				fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+					`%s`+
+					`<iframe id="email-body-frame"`+
+					` src="/messages/%d/body"`+
+					` sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`+
+					` class="email-iframe"`+
+					` scrolling="no"`+
+					` frameborder="0"`+
+					`></iframe>`+
+					`</div>`,
+					toolbarHTML, id)
+			} else {
+				fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+					`%s`+
+					`<iframe id="email-body-frame"`+
+					` src="/messages/%d/body"`+
+					` sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`+
+					` class="email-iframe"`+
+					` scrolling="no"`+
+					` frameborder="0"`+
+					`></iframe>`+
+					`</div>`,
+					bannerHTML, id)
+			}
+		}
+		return
+	}
+
+	// Fallback: only text body available
+	if msg.BodyText != "" {
+		fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+			`<pre class="body-text-pre">%s</pre>`+
+			`</div>`,
+			html.EscapeString(msg.BodyText))
+		return
+	}
+
+	fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+		`<p class="body-empty">No message body available.</p>`+
+		`</div>`)
 }
 
 func (h *handlers) messagesList(w http.ResponseWriter, r *http.Request) {
@@ -203,7 +302,8 @@ func (h *handlers) messageDetail(w http.ResponseWriter, r *http.Request) {
 		title = fmt.Sprintf("Message #%d", msg.ID)
 	}
 
-	content := templates.MessageDetailPage(msg)
+	format := r.URL.Query().Get("format")
+	content := templates.MessageDetailPage(msg, format)
 	h.renderPage(w, r, title, content)
 }
 
