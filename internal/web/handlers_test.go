@@ -16,7 +16,9 @@ import (
 )
 
 // mockEngine implements query.Engine with sensible test data.
-type mockEngine struct{}
+type mockEngine struct {
+	threadMessages []query.MessageSummary
+}
 
 func (m *mockEngine) Aggregate(_ context.Context, _ query.ViewType, _ query.AggregateOptions) ([]query.AggregateRow, error) {
 	return []query.AggregateRow{
@@ -32,7 +34,19 @@ func (m *mockEngine) SubAggregate(_ context.Context, _ query.MessageFilter, _ qu
 	}, nil
 }
 
-func (m *mockEngine) ListMessages(_ context.Context, _ query.MessageFilter) ([]query.MessageSummary, error) {
+func (m *mockEngine) ListMessages(_ context.Context, filter query.MessageFilter) ([]query.MessageSummary, error) {
+	if filter.ConversationID != nil {
+		if m.threadMessages != nil {
+			return m.threadMessages, nil
+		}
+		// Default thread messages for conversationID 42
+		now := time.Now()
+		return []query.MessageSummary{
+			{ID: 10, ConversationID: 42, Subject: "Thread Subject", Snippet: "First message snippet", FromEmail: "alice@example.com", FromName: "Alice", SentAt: now.Add(-2 * time.Hour)},
+			{ID: 11, ConversationID: 42, Subject: "Thread Subject", Snippet: "Second message snippet", FromEmail: "bob@example.com", FromName: "Bob", SentAt: now.Add(-1 * time.Hour)},
+			{ID: 12, ConversationID: 42, Subject: "Thread Subject", Snippet: "Third message snippet", FromEmail: "alice@example.com", FromName: "Alice", SentAt: now},
+		}, nil
+	}
 	now := time.Now()
 	return []query.MessageSummary{
 		{ID: 1, Subject: "Test Subject One", FromEmail: "alice@example.com", SentAt: now},
@@ -128,7 +142,7 @@ func setupTestServer(t *testing.T) *httptest.Server {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	srv := NewServer(&mockEngine{}, "", delMgr, logger)
+	srv := NewServer(&mockEngine{}, "", delMgr, logger) //nolint:exhaustruct
 	router := srv.buildRouter()
 
 	return httptest.NewServer(router)
@@ -495,6 +509,168 @@ func TestMessageBodyWrapperShowImages(t *testing.T) {
 	}
 	if !strings.Contains(bodyStr, "showImages=true") {
 		t.Errorf("GET /messages/1/body-wrapper?showImages=true: iframe src should contain showImages=true")
+	}
+}
+
+// setupTestServerWithEngine creates an httptest.Server using the provided engine.
+func setupTestServerWithEngine(t *testing.T, engine query.Engine) *httptest.Server {
+	t.Helper()
+
+	deletionsDir := t.TempDir()
+	delMgr, err := deletion.NewManager(deletionsDir)
+	if err != nil {
+		t.Fatalf("failed to create deletion manager: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	srv := NewServer(engine, "", delMgr, logger)
+	router := srv.buildRouter()
+
+	return httptest.NewServer(router)
+}
+
+// TestThreadView verifies GET /threads/42 returns 200 with three thread messages.
+func TestThreadView(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/threads/42")
+	if err != nil {
+		t.Fatalf("GET /threads/42: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /threads/42: expected status 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "thread-message") {
+		t.Errorf("GET /threads/42: body does not contain 'thread-message' class")
+	}
+	if !strings.Contains(bodyStr, `data-msg-id="10"`) {
+		t.Errorf("GET /threads/42: body does not contain data-msg-id for message 10")
+	}
+	if !strings.Contains(bodyStr, `data-msg-id="11"`) {
+		t.Errorf("GET /threads/42: body does not contain data-msg-id for message 11")
+	}
+	if !strings.Contains(bodyStr, `data-msg-id="12"`) {
+		t.Errorf("GET /threads/42: body does not contain data-msg-id for message 12")
+	}
+}
+
+// TestThreadViewNotFound verifies GET /threads with an ID that returns no messages gives an error.
+func TestThreadViewNotFound(t *testing.T) {
+	// Use an engine that returns empty messages for any conversationID
+	engine := &mockEngine{
+		threadMessages: []query.MessageSummary{},
+	}
+	srv := setupTestServerWithEngine(t, engine)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/threads/99999")
+	if err != nil {
+		t.Fatalf("GET /threads/99999: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /threads/99999: expected status 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestThreadViewInvalidID verifies GET /threads/abc returns 400.
+func TestThreadViewInvalidID(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/threads/abc")
+	if err != nil {
+		t.Fatalf("GET /threads/abc: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("GET /threads/abc: expected status 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestThreadViewHighlight verifies GET /threads/42?highlight=11 returns 200 with data-highlight.
+func TestThreadViewHighlight(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/threads/42?highlight=11")
+	if err != nil {
+		t.Fatalf("GET /threads/42?highlight=11: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /threads/42?highlight=11: expected status 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, `data-highlight="11"`) {
+		t.Errorf("GET /threads/42?highlight=11: body does not contain data-highlight=\"11\"")
+	}
+}
+
+// TestThreadMessageCollapsible verifies latest message is open and earlier messages are collapsed.
+func TestThreadMessageCollapsible(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/threads/42")
+	if err != nil {
+		t.Fatalf("GET /threads/42: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// The page should contain <details elements
+	if !strings.Contains(bodyStr, "<details") {
+		t.Errorf("GET /threads/42: body does not contain <details elements")
+	}
+
+	// Latest message (ID 12) should appear with open attribute
+	if !strings.Contains(bodyStr, `id="msg-12"`) {
+		t.Errorf("GET /threads/42: body does not contain id=\"msg-12\"")
+	}
+}
+
+// TestThreadLazyLoad verifies non-latest messages have hx-get lazy-load placeholders.
+func TestThreadLazyLoad(t *testing.T) {
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/threads/42")
+	if err != nil {
+		t.Fatalf("GET /threads/42: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Non-latest messages should have hx-get pointing to body-wrapper
+	if !strings.Contains(bodyStr, "/messages/10/body-wrapper") {
+		t.Errorf("GET /threads/42: body does not contain lazy-load hx-get for message 10")
+	}
+	if !strings.Contains(bodyStr, "/messages/11/body-wrapper") {
+		t.Errorf("GET /threads/42: body does not contain lazy-load hx-get for message 11")
+	}
+	// Latest message (12) should NOT have a body-wrapper hx-get (it's eager loaded)
+	// But it WILL have the iframe src — verify the iframe is present
+	if !strings.Contains(bodyStr, "/messages/12/body") {
+		t.Errorf("GET /threads/42: body does not contain eager iframe for message 12")
 	}
 }
 

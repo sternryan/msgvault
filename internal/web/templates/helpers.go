@@ -58,3 +58,28 @@ func Pluralize(n int64, singular, plural string) string {
 	}
 	return plural
 }
+
+// RelativeDate formats a time relative to now for thread summary display.
+func RelativeDate(t time.Time) string {
+	now := time.Now()
+	diff := now.Sub(t)
+	switch {
+	case diff < 24*time.Hour:
+		return t.Format("3:04 PM")
+	case diff < 7*24*time.Hour:
+		return t.Format("Mon 3:04 PM")
+	case t.Year() == now.Year():
+		return t.Format("Jan 2")
+	default:
+		return t.Format("Jan 2, 2006")
+	}
+}
+
+// Truncate truncates a string to n runes, appending ellipsis if truncated.
+func Truncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + "..."
+}
