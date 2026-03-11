@@ -26,6 +26,7 @@ Phases 1-5 delivered the complete offline Gmail archiver: full/incremental sync,
 - [x] **Phase 7: Email Rendering** - Sanitize and sandbox HTML email bodies; serve inline attachments with CID substitution and external image blocking (completed 2026-03-11)
 - [x] **Phase 8: Thread View** - Full conversation view with collapsible messages, inline images, and keyboard navigation (completed 2026-03-11)
 - [x] **Phase 9: Polish** - Text/HTML toggle, loading indicators, CSS bar chart for dashboard, and final validation pass (completed 2026-03-11)
+- [ ] **Phase 10: Integration Test & DOM Cleanup** - Fix stale test assertions and duplicate DOM IDs from cross-phase integration
 
 ## Phase Details
 
@@ -92,6 +93,17 @@ Plans:
 - [ ] 09-01-PLAN.md — Text/HTML body toggle (message detail + thread) and CSS bar chart for dashboard
 - [ ] 09-02-PLAN.md — Loading indicators on all HTMX partial update trigger points
 
+### Phase 10: Integration Test & DOM Cleanup
+**Goal**: Cross-phase integration debt is resolved — stale test assertions match current implementation and thread view DOM is spec-compliant
+**Depends on**: Phase 9
+**Requirements**: RENDER-04, POLISH-01 (integration fix, not re-implementation)
+**Gap Closure:** Closes INT-01, INT-02 from v1.1 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. `TestMessageBodyWrapperEndpoint` passes with assertions matching Phase 9's unified toolbar (`email-toolbar`, `closest .email-render-wrapper`)
+  2. Thread view lazy-loaded messages use unique IDs (e.g., `email-body-wrapper-{messageID}`) instead of duplicate `id=email-body-wrapper`
+  3. `go test ./internal/web/...` passes with no test failures
+**Plans:** 0/1 plans needed
+
 ## Progress
 
 **Execution Order:**
@@ -104,3 +116,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 | 7. Email Rendering | 2/2 | Complete   | 2026-03-11 | - |
 | 8. Thread View | 2/2 | Complete   | 2026-03-11 | - |
 | 9. Polish | 2/2 | Complete   | 2026-03-11 | - |
+| 10. Integration Test & DOM Cleanup | 0/1 | Pending | - | - |
