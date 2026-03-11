@@ -9,11 +9,11 @@ Requirements for the Web UI rebuild. Each maps to roadmap phases.
 
 ### Foundation
 
-- [ ] **FOUND-01**: User can access the web UI from a single `go build` binary with no npm/Node.js dependency
-- [ ] **FOUND-02**: Web UI serves all pages via server-rendered Templ + HTMX (adopted from upstream PR #176)
+- [x] **FOUND-01**: User can access the web UI from a single `go build` binary with no npm/Node.js dependency
+- [x] **FOUND-02**: Web UI serves all pages via server-rendered Templ + HTMX (adopted from upstream PR #176)
 - [ ] **FOUND-03**: React SPA (`web/`), JSON API server (`internal/api/`), and all npm/Vite tooling are removed
-- [ ] **FOUND-04**: All static assets (HTMX, CSS, JS) are embedded via `go:embed` in the binary
-- [ ] **FOUND-05**: Generated `_templ.go` files are committed so `go build` works without the `templ` CLI installed
+- [x] **FOUND-04**: All static assets (HTMX, CSS, JS) are embedded via `go:embed` in the binary
+- [x] **FOUND-05**: Generated `_templ.go` files are committed so `go build` works without the `templ` CLI installed
 
 ### Web UI Parity
 
@@ -77,11 +77,11 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 6 | Pending |
-| FOUND-02 | Phase 6 | Pending |
+| FOUND-01 | Phase 6 | Complete |
+| FOUND-02 | Phase 6 | Complete |
 | FOUND-03 | Phase 6 | Pending |
-| FOUND-04 | Phase 6 | Pending |
-| FOUND-05 | Phase 6 | Pending |
+| FOUND-04 | Phase 6 | Complete |
+| FOUND-05 | Phase 6 | Complete |
 | PARITY-01 | Phase 6 | Pending |
 | PARITY-02 | Phase 6 | Pending |
 | PARITY-03 | Phase 6 | Pending |

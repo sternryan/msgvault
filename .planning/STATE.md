@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Phase 6 context gathered
-last_updated: "2026-03-11T01:29:42.722Z"
+stopped_at: Completed 06-01-PLAN.md — Templ+HTMX+chi foundation
+last_updated: "2026-03-11T02:16:56.604Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 5
+  completed_plans: 1
   percent: 20
 ---
 
@@ -46,6 +46,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 | 1-5 (v1.0) | — | shipped | — |
 
 *Updated after each plan completion*
+| Phase 06-foundation P01 | 6min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -56,6 +57,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Pre-v1.1]: bluemonday sanitizeHTML helper established in helpers.go in Phase 6 before any template renders email bodies
 - [Pre-v1.1]: All HTML email bodies render in sandboxed iframe — never allow-scripts + allow-same-origin together
 - [Pre-v1.1]: HTMX hx-select pattern for partials — full pages always, HTMX extracts fragment client-side
+- [Phase 06-01]: buildRouter() extracted from Start() for testability; chi middleware signatures updated to func(logger) func(http.Handler) http.Handler; renderPage centralizes account listing and deletion count on every page
 
 ### Pending Todos
 
@@ -70,6 +72,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T01:29:42.721Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-foundation/06-CONTEXT.md
+Last session: 2026-03-11T02:16:56.602Z
+Stopped at: Completed 06-01-PLAN.md — Templ+HTMX+chi foundation
+Resume file: None
