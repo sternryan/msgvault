@@ -1,0 +1,336 @@
+package templates
+
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/wesm/msgvault/internal/query"
+)
+
+// viewTabs defines the ordered set of view type tabs.
+var viewTabs = []struct {
+	Label string
+	Param string
+}{
+	{"Senders", "senders"},
+	{"Sender Names", "senderNames"},
+	{"Recipients", "recipients"},
+	{"Recipient Names", "recipientNames"},
+	{"Domains", "domains"},
+	{"Labels", "labels"},
+	{"Time", "time"},
+}
+
+// activeViewParam returns the URL param string for the given ViewType.
+func activeViewParam(v query.ViewType) string {
+	switch v {
+	case query.ViewSenders:
+		return "senders"
+	case query.ViewSenderNames:
+		return "senderNames"
+	case query.ViewRecipients:
+		return "recipients"
+	case query.ViewRecipientNames:
+		return "recipientNames"
+	case query.ViewDomains:
+		return "domains"
+	case query.ViewLabels:
+		return "labels"
+	case query.ViewTime:
+		return "time"
+	default:
+		return "senders"
+	}
+}
+
+// aggregateTabURL builds the URL for a view type tab, preserving sourceId.
+func aggregateTabURL(param, sourceID string) string {
+	u := &url.URL{Path: "/aggregate"}
+	q := url.Values{}
+	q.Set("groupBy", param)
+	if sourceID != "" {
+		q.Set("sourceId", sourceID)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// drilldownTabURL builds a sub-view tab URL for the drill-down page.
+func drilldownTabURL(groupBy, filterKey, filterView, sourceID string) string {
+	u := &url.URL{Path: "/aggregate/drilldown"}
+	q := url.Values{}
+	q.Set("groupBy", groupBy)
+	q.Set("filterKey", filterKey)
+	if filterView != "" {
+		q.Set("filterView", filterView)
+	}
+	if sourceID != "" {
+		q.Set("sourceId", sourceID)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// drilldownRowURL builds the URL for clicking an aggregate row to drill down.
+func drilldownRowURL(groupBy, filterKey, sourceID string) string {
+	u := &url.URL{Path: "/aggregate/drilldown"}
+	q := url.Values{}
+	q.Set("groupBy", groupBy)
+	q.Set("filterKey", filterKey)
+	if sourceID != "" {
+		q.Set("sourceId", sourceID)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// AggregatePage renders the top-level aggregate view with view type tabs,
+// sortable column headers, a filter bar, and a clickable data table.
+templ AggregatePage(viewType query.ViewType, rows []query.AggregateRow, sortField, sortDir, baseURL, searchQuery, sourceID string) {
+	<div class="page-content" id="main-content">
+		<div class="page-header">
+			<h2 class="page-title">Aggregate</h2>
+		</div>
+		<!-- View type tabs -->
+		<div class="view-tabs">
+			for _, tab := range viewTabs {
+				if tab.Param == activeViewParam(viewType) {
+					<a
+						class="tab view-tab active"
+						data-view={ tab.Param }
+						href={ templ.SafeURL(aggregateTabURL(tab.Param, sourceID)) }
+						hx-get={ aggregateTabURL(tab.Param, sourceID) }
+						hx-select="#main-content"
+						hx-target="#main-content"
+						hx-swap="outerHTML"
+						hx-push-url="true"
+					>{ tab.Label }</a>
+				} else {
+					<a
+						class="tab view-tab"
+						data-view={ tab.Param }
+						href={ templ.SafeURL(aggregateTabURL(tab.Param, sourceID)) }
+						hx-get={ aggregateTabURL(tab.Param, sourceID) }
+						hx-select="#main-content"
+						hx-target="#main-content"
+						hx-swap="outerHTML"
+						hx-push-url="true"
+					>{ tab.Label }</a>
+				}
+			}
+		</div>
+		<!-- Filter bar -->
+		<div class="filter-bar">
+			<input
+				type="text"
+				name="search"
+				value={ searchQuery }
+				placeholder={ fmt.Sprintf("Filter %s...", viewType.String()) }
+				hx-get={ aggregateTabURL(activeViewParam(viewType), sourceID) }
+				hx-trigger="input changed delay:500ms, keyup[key=='Enter']"
+				hx-select="#main-content"
+				hx-target="#main-content"
+				hx-replace-url="true"
+				hx-include="[name='sourceId']"
+				class="filter-input"
+			/>
+		</div>
+		<!-- Aggregate table -->
+		if len(rows) == 0 {
+			<div class="empty-state">
+				<p>No data for { viewType.String() } view.</p>
+			</div>
+		} else {
+			<div class="table-meta">
+				if len(rows) > 0 && rows[0].TotalUnique > 0 {
+					Showing { fmt.Sprintf("%d", len(rows)) } of { FormatNum(rows[0].TotalUnique) } unique { viewType.String() }
+				} else {
+					{ fmt.Sprintf("%d", len(rows)) } { viewType.String() }
+				}
+			</div>
+			<table class="data-table aggregate-table">
+				<thead>
+					<tr>
+						@SortHeader("Name", "name", sortField, sortDir, baseURL)
+						@SortHeader("Count", "count", sortField, sortDir, baseURL)
+						@SortHeader("Size", "size", sortField, sortDir, baseURL)
+						@SortHeader("Att. Size", "attachmentSize", sortField, sortDir, baseURL)
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr
+							class="clickable-row aggregate-row"
+							data-href={ drilldownRowURL(activeViewParam(viewType), row.Key, sourceID) }
+							hx-get={ drilldownRowURL(activeViewParam(viewType), row.Key, sourceID) }
+							hx-select="#main-content"
+							hx-target="#main-content"
+							hx-swap="outerHTML"
+							hx-push-url="true"
+						>
+							<td class="col-key" title={ row.Key }>{ truncateStr(row.Key, 60) }</td>
+							<td class="col-count">{ FormatNum(row.Count) }</td>
+							<td class="col-size">{ FormatBytes(row.TotalSize) }</td>
+							<td class="col-att-size">{ FormatBytes(row.AttachmentSize) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	</div>
+}
+
+// AggregateDrilldownPage renders a drill-down view showing either a sub-aggregate
+// table or a messages list, with breadcrumbs and sub-view tabs.
+// msgOffset is the current pagination offset (0-based) for the messages view.
+templ AggregateDrilldownPage(breadcrumbs []BreadcrumbItem, groupBy, filterKey, subViewType string, rows []query.AggregateRow, messages []query.MessageSummary, sortField, sortDir, baseURL, sourceID string, msgTotal int64, msgOffset int) {
+	<div class="page-content" id="main-content">
+		<!-- Breadcrumbs -->
+		<div class="breadcrumbs">
+			for i, crumb := range breadcrumbs {
+				if i > 0 {
+					<span class="breadcrumb-sep"> &rsaquo; </span>
+				}
+				if crumb.URL != "" {
+					<a
+						class="breadcrumb-link"
+						href={ templ.SafeURL(crumb.URL) }
+						hx-get={ crumb.URL }
+						hx-select="#main-content"
+						hx-target="#main-content"
+						hx-swap="outerHTML"
+						hx-push-url="true"
+					>{ crumb.Label }</a>
+				} else {
+					<span class="breadcrumb-current">{ crumb.Label }</span>
+				}
+			}
+		</div>
+		<!-- Sub-view tabs (all view types except the current groupBy) -->
+		<div class="view-tabs sub-view-tabs">
+			<!-- "Messages" tab (no filterView = show messages) -->
+			if subViewType == "" {
+				<a
+					class="tab view-tab active"
+					href={ templ.SafeURL(drilldownTabURL(groupBy, filterKey, "", sourceID)) }
+					hx-get={ drilldownTabURL(groupBy, filterKey, "", sourceID) }
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+				>Messages</a>
+			} else {
+				<a
+					class="tab view-tab"
+					href={ templ.SafeURL(drilldownTabURL(groupBy, filterKey, "", sourceID)) }
+					hx-get={ drilldownTabURL(groupBy, filterKey, "", sourceID) }
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+				>Messages</a>
+			}
+			<!-- Sub-aggregate tabs for each view type that differs from the current groupBy -->
+			for _, tab := range viewTabs {
+				if tab.Param != groupBy {
+					if tab.Param == subViewType {
+						<a
+							class="tab view-tab active"
+							data-view={ tab.Param }
+							href={ templ.SafeURL(drilldownTabURL(groupBy, filterKey, tab.Param, sourceID)) }
+							hx-get={ drilldownTabURL(groupBy, filterKey, tab.Param, sourceID) }
+							hx-select="#main-content"
+							hx-target="#main-content"
+							hx-swap="outerHTML"
+							hx-push-url="true"
+						>{ tab.Label }</a>
+					} else {
+						<a
+							class="tab view-tab"
+							data-view={ tab.Param }
+							href={ templ.SafeURL(drilldownTabURL(groupBy, filterKey, tab.Param, sourceID)) }
+							hx-get={ drilldownTabURL(groupBy, filterKey, tab.Param, sourceID) }
+							hx-select="#main-content"
+							hx-target="#main-content"
+							hx-swap="outerHTML"
+							hx-push-url="true"
+						>{ tab.Label }</a>
+					}
+				}
+			}
+		</div>
+		<!-- Content: sub-aggregate table or messages list -->
+		if rows != nil {
+			<!-- Sub-aggregate table -->
+			if len(rows) == 0 {
+				<div class="empty-state">
+					<p>No sub-aggregate data for { filterKey }.</p>
+				</div>
+			} else {
+				<table class="data-table aggregate-table">
+					<thead>
+						<tr>
+							@SortHeader("Name", "name", sortField, sortDir, baseURL)
+							@SortHeader("Count", "count", sortField, sortDir, baseURL)
+							@SortHeader("Size", "size", sortField, sortDir, baseURL)
+							@SortHeader("Att. Size", "attachmentSize", sortField, sortDir, baseURL)
+						</tr>
+					</thead>
+					<tbody>
+						for _, row := range rows {
+							<tr class="aggregate-row">
+								<td class="col-key" title={ row.Key }>{ truncateStr(row.Key, 60) }</td>
+								<td class="col-count">{ FormatNum(row.Count) }</td>
+								<td class="col-size">{ FormatBytes(row.TotalSize) }</td>
+								<td class="col-att-size">{ FormatBytes(row.AttachmentSize) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		} else if messages != nil {
+			<!-- Messages list for this drill-down key -->
+			if len(messages) == 0 {
+				<div class="empty-state">
+					<p>No messages found for { filterKey }.</p>
+				</div>
+			} else {
+				<table class="data-table messages-table">
+					<thead>
+						<tr>
+							<th>From</th>
+							<th>Subject</th>
+							<th>Date</th>
+							<th>Size</th>
+							<th title="Attachments">Att.</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, msg := range messages {
+							<tr
+								class="clickable-row message-row"
+								data-href={ fmt.Sprintf("/messages/%d", msg.ID) }
+								hx-get={ fmt.Sprintf("/messages/%d", msg.ID) }
+								hx-select="#main-content"
+								hx-target="#main-content"
+								hx-swap="outerHTML"
+								hx-replace-url="true"
+							>
+								<td class="col-from" title={ msg.FromEmail }>{ truncateStr(displayFrom(msg.FromName, msg.FromEmail), 30) }</td>
+								<td class="col-subject" title={ msg.Snippet }>{ truncateStr(msg.Subject, 60) }</td>
+								<td class="col-date">{ FormatDate(msg.SentAt) }</td>
+								<td class="col-size">{ FormatBytes(msg.SizeEstimate) }</td>
+								<td class="col-att">
+									if msg.HasAttachments {
+										{ fmt.Sprintf("%d", msg.AttachmentCount) }
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+				@Pagination(baseURL, msgOffset, 50, msgTotal)
+			}
+		}
+	</div>
+}
