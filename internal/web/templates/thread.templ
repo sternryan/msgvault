@@ -53,6 +53,7 @@ templ ThreadPage(messages []query.MessageSummary, highlightID int64, subject str
 			hx-target="#main-content"
 			hx-swap="outerHTML"
 			hx-replace-url="true"
+			hx-indicator="#page-indicator"
 		>&larr; Back to messages</a>
 		<div class="thread-view">
 			<div class="thread-header">
@@ -116,6 +117,7 @@ templ ThreadMessageCard(msg query.MessageSummary, isLatest bool, highlightID int
 							hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?format=text", msg.ID) }
 							hx-target="closest .email-render-wrapper"
 							hx-swap="outerHTML"
+							hx-indicator="#page-indicator"
 						>Text</a>
 						<span class="email-toolbar-btn active">HTML</span>
 						<span class="email-toolbar-sep">&middot;</span>
@@ -124,6 +126,7 @@ templ ThreadMessageCard(msg query.MessageSummary, isLatest bool, highlightID int
 							hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?showImages=true", msg.ID) }
 							hx-target="closest .email-render-wrapper"
 							hx-swap="outerHTML"
+							hx-indicator="#page-indicator"
 						>Load images</a>
 					</div>
 					<iframe
@@ -158,6 +161,7 @@ templ ThreadMessageCard(msg query.MessageSummary, isLatest bool, highlightID int
 				hx-get={ fmt.Sprintf("/messages/%d/body-wrapper", msg.ID) }
 				hx-trigger="toggle once"
 				hx-swap="innerHTML"
+				hx-indicator="#page-indicator"
 			>
 				<p class="loading-placeholder">Loading message...</p>
 			</div>

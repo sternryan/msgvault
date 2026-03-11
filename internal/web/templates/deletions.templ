@@ -50,6 +50,7 @@ templ DeletionsPage(manifests []*deletion.Manifest) {
 										hx-target="closest tr"
 										hx-swap="outerHTML"
 										hx-confirm="Cancel this deletion batch?"
+										hx-indicator="#page-indicator"
 									>Cancel</button>
 								}
 							</td>

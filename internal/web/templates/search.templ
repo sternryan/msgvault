@@ -80,6 +80,7 @@ templ SearchPage(q string, results []query.MessageSummary, total int64, baseURL 
 								hx-target="#main-content"
 								hx-swap="outerHTML"
 								hx-replace-url="true"
+								hx-indicator="#page-indicator"
 							>
 								<td class="col-from" title={ msg.FromEmail }>{ truncateStr(displayFrom(msg.FromName, msg.FromEmail), 30) }</td>
 								<td class="col-subject" title={ msg.Snippet }>{ truncateStr(msg.Subject, 60) }</td>
