@@ -66,6 +66,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Delete("/deletions/{id}", h.cancelDeletion)
 	r.Get("/attachments/{id}/download", h.downloadAttachment)
 	r.Get("/attachments/{id}/inline", h.inlineAttachment)
+	r.Get("/threads/{conversationId}", h.threadView)
 
 	return r
 }
