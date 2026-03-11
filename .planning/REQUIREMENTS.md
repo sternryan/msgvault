@@ -45,7 +45,7 @@ Requirements for the Web UI rebuild. Each maps to roadmap phases.
 
 - [x] **POLISH-01**: User can toggle between plain text and HTML rendering per message
 - [x] **POLISH-02**: Dashboard displays time-series data as a CSS bar chart (no JS charting library)
-- [ ] **POLISH-03**: Loading indicators display during HTMX partial page updates
+- [x] **POLISH-03**: Loading indicators display during HTMX partial page updates
 
 ## v2 Requirements
 
@@ -101,7 +101,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | THREAD-05 | Phase 8 | Complete |
 | POLISH-01 | Phase 9 | Complete |
 | POLISH-02 | Phase 9 | Complete |
-| POLISH-03 | Phase 9 | Pending |
+| POLISH-03 | Phase 9 | Complete |
 
 **Coverage:**
 - v1.1 requirements: 25 total

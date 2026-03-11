@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-03-11T16:52:07.585Z"
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-03-11T16:59:38.022Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
   percent: 20
 ---
 
@@ -56,6 +56,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 | Phase 08-thread-view P01 | 3min | 2 tasks | 6 files |
 | Phase 08-thread-view P02 | 4min | 2 tasks | 4 files |
 | Phase 09-polish P01 | 3min | 2 tasks | 10 files |
+| Phase 09-polish P02 | 5min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,9 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Phase 09-polish]: hx-replace-url uses literal canonical URL (/messages/{id}?format={f}), not hx-replace-url=true, to prevent body-wrapper URL in address bar
 - [Phase 09-polish]: chartMaxCount computed once in handler (templates.MaxAggregateCount) and passed to template — avoids O(n^2) in template loop
 - [Phase 09-polish]: chart Limit=10000 (not 0) because Limit=0 triggers internal default=100 in query engine
+- [Phase 09-polish]: Universal #page-indicator for all #main-content swaps — simpler and consistent vs per-trigger indicators
+- [Phase 09-polish]: Specialized #filter-indicator and #stage-indicator for aggregate filter and staging form for contextual UX
+- [Phase 09-polish]: .page-indicator-bar uses height:0 + overflow:visible so indicator consumes no layout space
 
 ### Pending Todos
 
@@ -106,6 +110,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T16:52:07.583Z
-Stopped at: Completed 09-01-PLAN.md
+Last session: 2026-03-11T16:59:38.002Z
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None

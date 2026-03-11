@@ -25,7 +25,7 @@ Phases 1-5 delivered the complete offline Gmail archiver: full/incremental sync,
 - [x] **Phase 6: Foundation** - Adopt PR #176's Templ + HTMX UI, achieve full parity with React SPA, produce single `go build` binary with no npm (completed 2026-03-11)
 - [x] **Phase 7: Email Rendering** - Sanitize and sandbox HTML email bodies; serve inline attachments with CID substitution and external image blocking (completed 2026-03-11)
 - [x] **Phase 8: Thread View** - Full conversation view with collapsible messages, inline images, and keyboard navigation (completed 2026-03-11)
-- [ ] **Phase 9: Polish** - Text/HTML toggle, loading indicators, CSS bar chart for dashboard, and final validation pass
+- [x] **Phase 9: Polish** - Text/HTML toggle, loading indicators, CSS bar chart for dashboard, and final validation pass (completed 2026-03-11)
 
 ## Phase Details
 
@@ -86,7 +86,7 @@ Plans:
   1. On a message with both text and HTML parts, user can toggle between plain text and HTML rendering and the preference persists in the URL
   2. The dashboard displays a time-series bar chart of archive volume using only CSS (no JS charting library)
   3. Triggering any HTMX partial update (search, sort, pagination, staging) shows a visible loading indicator until the response arrives
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 09-01-PLAN.md — Text/HTML body toggle (message detail + thread) and CSS bar chart for dashboard
@@ -103,4 +103,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 | 6. Foundation | 5/5 | Complete   | 2026-03-11 | - |
 | 7. Email Rendering | 2/2 | Complete   | 2026-03-11 | - |
 | 8. Thread View | 2/2 | Complete   | 2026-03-11 | - |
-| 9. Polish | 1/2 | In Progress|  | - |
+| 9. Polish | 2/2 | Complete   | 2026-03-11 | - |
