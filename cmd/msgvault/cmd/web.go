@@ -41,7 +41,7 @@ Press Ctrl+C to stop the server.`,
 		dbPath := cfg.DatabaseDSN()
 		analyticsDir := cfg.AnalyticsDir()
 
-		_, engine, cleanup, err := initQueryEngine(dbPath, analyticsDir, webForceSQL, webNoCacheBuild)
+		store, engine, cleanup, err := initQueryEngine(dbPath, analyticsDir, webForceSQL, webNoCacheBuild)
 		if err != nil {
 			return err
 		}
@@ -62,6 +62,9 @@ Press Ctrl+C to stop the server.`,
 		webLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: level,
 		}))
+
+		// Launch CID backfill in background (non-blocking)
+		go web.BackfillContentIDs(store.DB(), webLogger)
 
 		srv := web.NewServer(engine, cfg.AttachmentsDir(), delMgr, webLogger)
 

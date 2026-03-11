@@ -55,10 +55,26 @@ templ MessageDetailPage(msg *query.MessageDetail) {
 				</dl>
 			</div>
 			<div class="message-body">
-				if msg.BodyText != "" {
+				if msg.BodyHTML != "" {
+					<div id="email-body-wrapper" class="email-render-wrapper">
+						<div class="email-images-banner">
+							<span>External images blocked.</span>
+							<a href="#"
+								hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?showImages=true", msg.ID) }
+								hx-target="#email-body-wrapper"
+								hx-swap="outerHTML">Load images</a>
+						</div>
+						<iframe
+							id="email-body-frame"
+							src={ templ.SafeURL(fmt.Sprintf("/messages/%d/body", msg.ID)) }
+							sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+							class="email-iframe"
+							scrolling="no"
+							frameborder="0"
+						></iframe>
+					</div>
+				} else if msg.BodyText != "" {
 					<pre class="body-text">{ msg.BodyText }</pre>
-				} else if msg.BodyHTML != "" {
-					<p class="body-notice">HTML body available — full rendering coming in a future update.</p>
 				} else {
 					<p class="body-empty">No message body available.</p>
 				}
