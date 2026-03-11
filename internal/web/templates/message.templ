@@ -18,6 +18,7 @@ templ MessageDetailPage(msg *query.MessageDetail, format string) {
 			hx-target="#main-content"
 			hx-swap="outerHTML"
 			hx-replace-url="true"
+			hx-indicator="#page-indicator"
 		>&larr; Back to messages</a>
 		<div class="message-detail">
 			<div class="message-headers">
@@ -32,6 +33,7 @@ templ MessageDetailPage(msg *query.MessageDetail, format string) {
 						hx-target="#main-content"
 						hx-swap="outerHTML"
 						hx-replace-url="true"
+						hx-indicator="#page-indicator"
 					>View thread &rarr;</a>
 				}
 				<dl class="header-list">
@@ -78,6 +80,7 @@ templ MessageDetailPage(msg *query.MessageDetail, format string) {
 									hx-target="#email-body-wrapper"
 									hx-swap="outerHTML"
 									hx-replace-url={ fmt.Sprintf("/messages/%d?format=html", msg.ID) }
+									hx-indicator="#page-indicator"
 								>HTML</a>
 							</div>
 						}
@@ -92,6 +95,7 @@ templ MessageDetailPage(msg *query.MessageDetail, format string) {
 									hx-target="#email-body-wrapper"
 									hx-swap="outerHTML"
 									hx-replace-url={ fmt.Sprintf("/messages/%d?format=text", msg.ID) }
+									hx-indicator="#page-indicator"
 								>Text</a>
 								<span class="email-toolbar-btn active">HTML</span>
 								<span class="email-toolbar-sep">&middot;</span>
@@ -99,7 +103,8 @@ templ MessageDetailPage(msg *query.MessageDetail, format string) {
 								<a href="#"
 									hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?showImages=true", msg.ID) }
 									hx-target="#email-body-wrapper"
-									hx-swap="outerHTML">Load images</a>
+									hx-swap="outerHTML"
+									hx-indicator="#page-indicator">Load images</a>
 							</div>
 						} else {
 							<div class="email-images-banner">
@@ -107,7 +112,8 @@ templ MessageDetailPage(msg *query.MessageDetail, format string) {
 								<a href="#"
 									hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?showImages=true", msg.ID) }
 									hx-target="#email-body-wrapper"
-									hx-swap="outerHTML">Load images</a>
+									hx-swap="outerHTML"
+									hx-indicator="#page-indicator">Load images</a>
 							</div>
 						}
 						<iframe

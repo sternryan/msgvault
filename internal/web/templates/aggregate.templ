@@ -127,6 +127,7 @@ templ AggregatePage(viewType query.ViewType, rows []query.AggregateRow, sortFiel
 						hx-target="#main-content"
 						hx-swap="outerHTML"
 						hx-push-url="true"
+						hx-indicator="#page-indicator"
 					>{ tab.Label }</a>
 				} else {
 					<a
@@ -138,6 +139,7 @@ templ AggregatePage(viewType query.ViewType, rows []query.AggregateRow, sortFiel
 						hx-target="#main-content"
 						hx-swap="outerHTML"
 						hx-push-url="true"
+						hx-indicator="#page-indicator"
 					>{ tab.Label }</a>
 				}
 			}
@@ -155,8 +157,10 @@ templ AggregatePage(viewType query.ViewType, rows []query.AggregateRow, sortFiel
 				hx-target="#main-content"
 				hx-replace-url="true"
 				hx-include="[name='sourceId']"
+				hx-indicator="#filter-indicator"
 				class="filter-input"
 			/>
+			<span id="filter-indicator" class="htmx-indicator">Filtering...</span>
 		</div>
 		<!-- Aggregate table -->
 		if len(rows) == 0 {
@@ -190,6 +194,7 @@ templ AggregatePage(viewType query.ViewType, rows []query.AggregateRow, sortFiel
 							hx-target="#main-content"
 							hx-swap="outerHTML"
 							hx-push-url="true"
+							hx-indicator="#page-indicator"
 						>
 							<td class="col-key" title={ row.Key }>{ truncateStr(row.Key, 60) }</td>
 							<td class="col-count">{ FormatNum(row.Count) }</td>
@@ -223,6 +228,7 @@ templ AggregateDrilldownPage(breadcrumbs []BreadcrumbItem, groupBy, filterKey, s
 						hx-target="#main-content"
 						hx-swap="outerHTML"
 						hx-push-url="true"
+						hx-indicator="#page-indicator"
 					>{ crumb.Label }</a>
 				} else {
 					<span class="breadcrumb-current">{ crumb.Label }</span>
@@ -245,6 +251,7 @@ templ AggregateDrilldownPage(breadcrumbs []BreadcrumbItem, groupBy, filterKey, s
 					hx-target="#main-content"
 					hx-swap="outerHTML"
 					hx-push-url="true"
+					hx-indicator="#page-indicator"
 				>Messages</a>
 			} else {
 				<a
@@ -255,6 +262,7 @@ templ AggregateDrilldownPage(breadcrumbs []BreadcrumbItem, groupBy, filterKey, s
 					hx-target="#main-content"
 					hx-swap="outerHTML"
 					hx-push-url="true"
+					hx-indicator="#page-indicator"
 				>Messages</a>
 			}
 			<!-- Sub-aggregate tabs for each view type that differs from the current groupBy -->
@@ -270,6 +278,7 @@ templ AggregateDrilldownPage(breadcrumbs []BreadcrumbItem, groupBy, filterKey, s
 							hx-target="#main-content"
 							hx-swap="outerHTML"
 							hx-push-url="true"
+							hx-indicator="#page-indicator"
 						>{ tab.Label }</a>
 					} else {
 						<a
@@ -281,6 +290,7 @@ templ AggregateDrilldownPage(breadcrumbs []BreadcrumbItem, groupBy, filterKey, s
 							hx-target="#main-content"
 							hx-swap="outerHTML"
 							hx-push-url="true"
+							hx-indicator="#page-indicator"
 						>{ tab.Label }</a>
 					}
 				}
@@ -342,6 +352,7 @@ templ AggregateDrilldownPage(breadcrumbs []BreadcrumbItem, groupBy, filterKey, s
 								hx-target="#main-content"
 								hx-swap="outerHTML"
 								hx-replace-url="true"
+								hx-indicator="#page-indicator"
 							>
 								<td class="col-from" title={ msg.FromEmail }>{ truncateStr(displayFrom(msg.FromName, msg.FromEmail), 30) }</td>
 								<td class="col-subject" title={ msg.Snippet }>{ truncateStr(msg.Subject, 60) }</td>
@@ -369,6 +380,7 @@ templ stagingForm(groupBy, filterKey, sourceID string) {
 			hx-post="/deletions/stage"
 			hx-target="#stage-result"
 			hx-swap="innerHTML"
+			hx-indicator="#stage-indicator"
 		>
 			switch groupBy {
 				case "senders":
@@ -398,5 +410,6 @@ templ stagingForm(groupBy, filterKey, sourceID string) {
 			>Stage for Deletion</button>
 		</form>
 		<div id="stage-result"></div>
+		<span id="stage-indicator" class="htmx-indicator">Staging...</span>
 	</div>
 }

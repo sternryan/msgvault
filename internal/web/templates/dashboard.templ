@@ -41,6 +41,7 @@ templ DashboardPage(stats *query.TotalStats, accounts []query.AccountInfo, topSe
 							hx-target="#main-content"
 							hx-swap="outerHTML"
 							hx-replace-url="true"
+							hx-indicator="#page-indicator"
 						>
 							<span class="chart-label">{ row.Key }</span>
 							<div class="chart-bar-track">
@@ -75,6 +76,7 @@ templ DashboardPage(stats *query.TotalStats, accounts []query.AccountInfo, topSe
 										hx-target="#main-content"
 										hx-swap="outerHTML"
 										hx-replace-url="true"
+										hx-indicator="#page-indicator"
 									>
 										<td class="col-key">{ row.Key }</td>
 										<td class="col-num">{ FormatNum(row.Count) }</td>
@@ -108,6 +110,7 @@ templ DashboardPage(stats *query.TotalStats, accounts []query.AccountInfo, topSe
 										hx-target="#main-content"
 										hx-swap="outerHTML"
 										hx-replace-url="true"
+										hx-indicator="#page-indicator"
 									>
 										<td class="col-key">{ row.Key }</td>
 										<td class="col-num">{ FormatNum(row.Count) }</td>
