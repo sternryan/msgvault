@@ -59,6 +59,21 @@ func (h *handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 		topDomains = nil
 	}
 
-	content := templates.DashboardPage(stats, accounts, topSenders, topDomains)
+	// Archive volume by month — sorted chronologically, all months (not capped at 100)
+	chartOpts := query.AggregateOptions{
+		SourceID:        aggSourceID,
+		SortField:       query.SortByName,
+		SortDirection:   query.SortAsc,
+		TimeGranularity: query.TimeMonth,
+		Limit:           10000, // NOT 0 — Limit=0 triggers default=100
+	}
+	chartData, err := h.engine.Aggregate(ctx, query.ViewTime, chartOpts)
+	if err != nil {
+		h.logger.Error("failed to load chart data for dashboard", "error", err)
+		chartData = nil
+	}
+	chartMaxCount := templates.MaxAggregateCount(chartData)
+
+	content := templates.DashboardPage(stats, accounts, topSenders, topDomains, chartData, chartMaxCount)
 	h.renderPage(w, r, "Dashboard", content)
 }

@@ -111,10 +111,16 @@ templ ThreadMessageCard(msg query.MessageSummary, isLatest bool, highlightID int
 					}
 				</dl>
 				<div id={ fmt.Sprintf("email-body-wrapper-%d", msg.ID) } class="email-render-wrapper">
-					<div class="email-images-banner">
+					<div class="email-toolbar">
+						<a class="email-toolbar-btn" href="#"
+							hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?format=text", msg.ID) }
+							hx-target="closest .email-render-wrapper"
+							hx-swap="outerHTML"
+						>Text</a>
+						<span class="email-toolbar-btn active">HTML</span>
+						<span class="email-toolbar-sep">&middot;</span>
 						<span>External images blocked.</span>
-						<a
-							href="#"
+						<a href="#"
 							hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?showImages=true", msg.ID) }
 							hx-target="closest .email-render-wrapper"
 							hx-swap="outerHTML"
