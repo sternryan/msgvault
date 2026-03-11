@@ -208,12 +208,12 @@ tbody tr a:hover {
 
 /* ---- Sort headers ---- */
 
-.sort-header {
+.sortable-header {
     cursor: pointer;
     user-select: none;
 }
 
-.sort-header:hover {
+.sortable-header:hover {
     color: var(--base0);
 }
 
