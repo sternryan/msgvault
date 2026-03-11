@@ -56,6 +56,8 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/", h.dashboard)
 	r.Get("/messages", h.messagesList)
 	r.Get("/messages/{id}", h.messageDetail)
+	r.Get("/messages/{id}/body", h.messageBody)
+	r.Get("/messages/{id}/body-wrapper", h.messageBodyWrapper)
 	r.Get("/aggregate", h.aggregate)
 	r.Get("/aggregate/drilldown", h.aggregateDrilldown)
 	r.Get("/search", h.searchPage)
