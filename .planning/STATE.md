@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Phase 9 context gathered
-last_updated: "2026-03-11T16:32:06.748Z"
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-03-11T16:52:07.585Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 11
+  completed_plans: 10
   percent: 20
 ---
 
@@ -55,6 +55,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 | Phase 07-email-rendering P02 | 8min | 3 tasks | 9 files |
 | Phase 08-thread-view P01 | 3min | 2 tasks | 6 files |
 | Phase 08-thread-view P02 | 4min | 2 tasks | 4 files |
+| Phase 09-polish P01 | 3min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,9 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Phase 08-thread-view]: View thread link renders for any non-zero ConversationID without a thread-size check — single-message threads show the link gracefully
 - [Phase 08-thread-view]: setupThreadHighlight uses data-highlightApplied attribute as one-time guard; safe to re-run on htmx:afterSettle
 - [Phase 08-thread-view]: Multi-iframe resize matches by contentWindow (e.source) with getElementById fallback for robustness
+- [Phase 09-polish]: hx-replace-url uses literal canonical URL (/messages/{id}?format={f}), not hx-replace-url=true, to prevent body-wrapper URL in address bar
+- [Phase 09-polish]: chartMaxCount computed once in handler (templates.MaxAggregateCount) and passed to template — avoids O(n^2) in template loop
+- [Phase 09-polish]: chart Limit=10000 (not 0) because Limit=0 triggers internal default=100 in query engine
 
 ### Pending Todos
 
@@ -102,6 +106,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T16:32:06.747Z
-Stopped at: Phase 9 context gathered
-Resume file: .planning/phases/09-polish/09-CONTEXT.md
+Last session: 2026-03-11T16:52:07.583Z
+Stopped at: Completed 09-01-PLAN.md
+Resume file: None
