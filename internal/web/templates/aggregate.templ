@@ -7,6 +7,29 @@ import (
 	"github.com/wesm/msgvault/internal/query"
 )
 
+// stagingFilterField returns the form field name and value for the staging form
+// based on the groupBy type.
+func stagingFilterField(groupBy, filterKey string) (name, value string) {
+	switch groupBy {
+	case "senders":
+		return "sender", filterKey
+	case "senderNames":
+		return "senderName", filterKey
+	case "recipients":
+		return "recipient", filterKey
+	case "recipientNames":
+		return "recipientName", filterKey
+	case "domains":
+		return "domain", filterKey
+	case "labels":
+		return "label", filterKey
+	case "time":
+		return "timePeriod", filterKey
+	default:
+		return "sender", filterKey
+	}
+}
+
 // viewTabs defines the ordered set of view type tabs.
 var viewTabs = []struct {
 	Label string
@@ -206,6 +229,10 @@ templ AggregateDrilldownPage(breadcrumbs []BreadcrumbItem, groupBy, filterKey, s
 				}
 			}
 		</div>
+		<!-- Stage for Deletion form (only shown in messages view, not sub-aggregate) -->
+		if subViewType == "" && filterKey != "" {
+			@stagingForm(groupBy, filterKey, sourceID)
+		}
 		<!-- Sub-view tabs (all view types except the current groupBy) -->
 		<div class="view-tabs sub-view-tabs">
 			<!-- "Messages" tab (no filterView = show messages) -->
@@ -332,5 +359,44 @@ templ AggregateDrilldownPage(breadcrumbs []BreadcrumbItem, groupBy, filterKey, s
 				@Pagination(baseURL, msgOffset, 50, msgTotal)
 			}
 		}
+	</div>
+}
+
+// stagingForm renders the "Stage for Deletion" form for the aggregate drill-down messages view.
+templ stagingForm(groupBy, filterKey, sourceID string) {
+	<div class="staging-bar">
+		<form
+			hx-post="/deletions/stage"
+			hx-target="#stage-result"
+			hx-swap="innerHTML"
+		>
+			switch groupBy {
+				case "senders":
+					<input type="hidden" name="sender" value={ filterKey }/>
+				case "senderNames":
+					<input type="hidden" name="senderName" value={ filterKey }/>
+				case "recipients":
+					<input type="hidden" name="recipient" value={ filterKey }/>
+				case "recipientNames":
+					<input type="hidden" name="recipientName" value={ filterKey }/>
+				case "domains":
+					<input type="hidden" name="domain" value={ filterKey }/>
+				case "labels":
+					<input type="hidden" name="label" value={ filterKey }/>
+				case "time":
+					<input type="hidden" name="timePeriod" value={ filterKey }/>
+				default:
+					<input type="hidden" name="sender" value={ filterKey }/>
+			}
+			if sourceID != "" {
+				<input type="hidden" name="sourceId" value={ sourceID }/>
+			}
+			<button
+				type="submit"
+				class="btn btn-sm btn-danger"
+				hx-confirm="Stage all messages matching this filter for deletion?"
+			>Stage for Deletion</button>
+		</form>
+		<div id="stage-result"></div>
 	</div>
 }

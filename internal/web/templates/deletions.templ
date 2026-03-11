@@ -1,0 +1,98 @@
+package templates
+
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/wesm/msgvault/internal/deletion"
+)
+
+// DeletionsPage renders the deletion manifests management page.
+templ DeletionsPage(manifests []*deletion.Manifest) {
+	<div class="page-content" id="main-content">
+		<div class="page-header">
+			<h2 class="page-title">Deletions</h2>
+		</div>
+		if len(manifests) == 0 {
+			<div class="empty-state">
+				<h3>No deletion batches yet</h3>
+				<p>Stage messages for deletion from the <a href="/aggregate">Aggregate</a> view.</p>
+			</div>
+		} else {
+			<table class="data-table deletions-table">
+				<thead>
+					<tr>
+						<th>ID</th>
+						<th>Description</th>
+						<th>Status</th>
+						<th>Messages</th>
+						<th>Created</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, m := range manifests {
+						<tr data-row={ m.ID }>
+							<td class="col-id">
+								<code>{ truncateStr(m.ID, 16) }</code>
+							</td>
+							<td class="col-description">{ m.Description }</td>
+							<td class="col-status">
+								<span class={ deletionStatusClass(m.Status) }>{ string(m.Status) }</span>
+							</td>
+							<td class="col-count">{ FormatNum(int64(len(m.GmailIDs))) }</td>
+							<td class="col-date">{ FormatTime(m.CreatedAt) }</td>
+							<td class="col-actions">
+								if m.Status == deletion.StatusPending {
+									<button
+										class="btn btn-sm btn-danger"
+										hx-delete={ fmt.Sprintf("/deletions/%s", m.ID) }
+										hx-target="closest tr"
+										hx-swap="outerHTML"
+										hx-confirm="Cancel this deletion batch?"
+									>Cancel</button>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	</div>
+}
+
+// deletionStatusClass returns the CSS class for a given deletion status.
+func deletionStatusClass(s deletion.Status) string {
+	switch s {
+	case deletion.StatusPending:
+		return "status-badge status-pending"
+	case deletion.StatusInProgress:
+		return "status-badge status-in_progress"
+	case deletion.StatusCompleted:
+		return "status-badge status-completed"
+	case deletion.StatusFailed:
+		return "status-badge status-failed"
+	case deletion.StatusCancelled:
+		return "status-badge status-cancelled"
+	default:
+		return "status-badge"
+	}
+}
+
+// DeletionBadgeOOB renders an out-of-band HTMX swap for the navbar deletion badge.
+// CRITICAL: This element must be rendered at the response root level, not nested inside another element.
+// HTMX silently ignores nested OOB swaps.
+templ DeletionBadgeOOB(count int) {
+	if count > 0 {
+		<span id="deletion-badge" class="badge" hx-swap-oob="true">{ strconv.Itoa(count) }</span>
+	} else {
+		<span id="deletion-badge" hx-swap-oob="true"></span>
+	}
+}
+
+// StageResult renders a success/confirmation banner after staging messages for deletion.
+templ StageResult(count int, description string) {
+	<div id="stage-result" class="stage-success">
+		{ fmt.Sprintf("Staged %d %s for deletion: %s", count, Pluralize(int64(count), "message", "messages"), description) }
+	</div>
+}

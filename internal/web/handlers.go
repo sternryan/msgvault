@@ -76,31 +76,6 @@ func (h *handlers) pendingDeletionCount() int {
 	return len(manifests)
 }
 
-// --- Page handlers (stubs for Plan 04; aggregate/search/messages implemented in Plans 02-03) ---
-
-func (h *handlers) deletionsPage(w http.ResponseWriter, r *http.Request) {
-	h.renderPage(w, r, "Deletions", templates.StubPage("Deletions"))
-}
-
-func (h *handlers) stageDeletion(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		h.renderError(w, r, http.StatusBadRequest, "invalid form data")
-		return
-	}
-	// Stub: real implementation in Plan 04
-	h.renderPage(w, r, "Deletions", templates.StubPage("Staged"))
-}
-
-func (h *handlers) cancelDeletion(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if id == "" {
-		h.renderError(w, r, http.StatusBadRequest, "deletion id is required")
-		return
-	}
-	// Stub: real implementation in Plan 04
-	w.WriteHeader(http.StatusOK)
-}
-
 // --- Attachment handlers (serve binary files, not HTML) ---
 
 func (h *handlers) downloadAttachment(w http.ResponseWriter, r *http.Request) {
