@@ -72,7 +72,7 @@ Plans:
   2. All messages in a conversation appear chronologically on one page, with the most recent message pre-expanded and earlier messages collapsed
   3. Expanding a collapsed message loads its body without a full page reload; inline images display directly, other attachments appear as download links
   4. User can move between messages in the thread using `n` (next) and `p` (previous) keyboard shortcuts
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 08-01-PLAN.md — Thread handler, route, templ template, and collapsible message rendering with lazy-load iframes
@@ -98,5 +98,5 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 | 1-5. Core Archive | v1.0 | - | Complete | 2026-03-10 |
 | 6. Foundation | 5/5 | Complete   | 2026-03-11 | - |
 | 7. Email Rendering | 2/2 | Complete   | 2026-03-11 | - |
-| 8. Thread View | v1.1 | 0/2 | Planning complete | - |
+| 8. Thread View | 1/2 | In Progress|  | - |
 | 9. Polish | v1.1 | 0/TBD | Not started | - |

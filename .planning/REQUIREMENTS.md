@@ -35,9 +35,9 @@ Requirements for the Web UI rebuild. Each maps to roadmap phases.
 
 ### Thread View
 
-- [ ] **THREAD-01**: User can view all messages in a conversation chronologically on a single page
-- [ ] **THREAD-02**: Thread messages are collapsible via native HTML `<details>`, with the latest message pre-expanded
-- [ ] **THREAD-03**: Inline images render directly in thread messages, other attachments as download links
+- [x] **THREAD-01**: User can view all messages in a conversation chronologically on a single page
+- [x] **THREAD-02**: Thread messages are collapsible via native HTML `<details>`, with the latest message pre-expanded
+- [x] **THREAD-03**: Inline images render directly in thread messages, other attachments as download links
 - [ ] **THREAD-04**: User can navigate to thread view from message detail via link and `t` keyboard shortcut
 - [ ] **THREAD-05**: User can scroll between thread messages with `n`/`p` keyboard shortcuts
 
@@ -94,9 +94,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | RENDER-02 | Phase 7 | Complete |
 | RENDER-03 | Phase 7 | Complete |
 | RENDER-04 | Phase 7 | Complete |
-| THREAD-01 | Phase 8 | Pending |
-| THREAD-02 | Phase 8 | Pending |
-| THREAD-03 | Phase 8 | Pending |
+| THREAD-01 | Phase 8 | Complete |
+| THREAD-02 | Phase 8 | Complete |
+| THREAD-03 | Phase 8 | Complete |
 | THREAD-04 | Phase 8 | Pending |
 | THREAD-05 | Phase 8 | Pending |
 | POLISH-01 | Phase 9 | Pending |
