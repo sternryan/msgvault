@@ -1006,3 +1006,14 @@ kbd {
     font-variant-numeric: tabular-nums;
     font-size: 0.8rem;
 }
+
+/* ---- Page-level loading indicator bar ---- */
+.page-indicator-bar {
+    padding: 0 1rem;
+    height: 0;
+    overflow: visible;
+}
+.page-indicator-bar .htmx-indicator {
+    position: relative;
+    top: 0.25rem;
+}

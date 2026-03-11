@@ -27,6 +27,7 @@ templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64,
 					hx-target="#main-content"
 					hx-swap="outerHTML"
 					hx-push-url="true"
+					hx-indicator="#page-indicator"
 				>Dashboard</a>
 				<a
 					href="/messages"
@@ -36,6 +37,7 @@ templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64,
 					hx-target="#main-content"
 					hx-swap="outerHTML"
 					hx-push-url="true"
+					hx-indicator="#page-indicator"
 				>Messages</a>
 				<a
 					href="/aggregate"
@@ -45,6 +47,7 @@ templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64,
 					hx-target="#main-content"
 					hx-swap="outerHTML"
 					hx-push-url="true"
+					hx-indicator="#page-indicator"
 				>Aggregate</a>
 				<a
 					href="/search"
@@ -54,6 +57,7 @@ templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64,
 					hx-target="#main-content"
 					hx-swap="outerHTML"
 					hx-push-url="true"
+					hx-indicator="#page-indicator"
 				>Search</a>
 				<a
 					href="/deletions"
@@ -63,6 +67,7 @@ templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64,
 					hx-target="#main-content"
 					hx-swap="outerHTML"
 					hx-push-url="true"
+					hx-indicator="#page-indicator"
 				>
 					Deletions
 					if pendingDeletions > 0 {
@@ -91,6 +96,9 @@ templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64,
 					}
 				</select>
 			</nav>
+			<div class="page-indicator-bar">
+				<span id="page-indicator" class="htmx-indicator">Loading...</span>
+			</div>
 			<main id="main-content">
 				{ children... }
 			</main>

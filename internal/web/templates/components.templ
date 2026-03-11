@@ -26,6 +26,7 @@ templ Pagination(baseURL string, offset, limit int, total int64) {
 					hx-target="#main-content"
 					hx-swap="outerHTML"
 					hx-replace-url="true"
+					hx-indicator="#page-indicator"
 				>&larr; Prev</a>
 			} else {
 				<span class="pagination-link pagination-link--disabled">&larr; Prev</span>
@@ -39,6 +40,7 @@ templ Pagination(baseURL string, offset, limit int, total int64) {
 					hx-target="#main-content"
 					hx-swap="outerHTML"
 					hx-replace-url="true"
+					hx-indicator="#page-indicator"
 				>Next &rarr;</a>
 			} else {
 				<span class="pagination-link pagination-link--disabled">Next &rarr;</span>
@@ -59,6 +61,7 @@ templ SortHeader(label, field, currentField, currentDir, baseURL string) {
 		hx-target="#main-content"
 		hx-swap="outerHTML"
 		hx-replace-url="true"
+		hx-indicator="#page-indicator"
 	>
 		<a href={ templ.SafeURL(sortURL(baseURL, field, currentField, currentDir)) } class="sort-link">
 			{ label }
