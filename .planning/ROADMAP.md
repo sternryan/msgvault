@@ -57,7 +57,11 @@ Plans:
   2. A malicious `<script>` tag in an email body does not execute in the browser (bluemonday strips it server-side before render)
   3. CID image references in an email body display as inline images served from the local attachment store
   4. External images in email bodies are hidden by default; clicking an opt-in toggle reveals them without a page reload
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — Schema migration (content_id), data layer updates, bluemonday sanitization pipeline with CID substitution and external image blocking
+- [ ] 07-02-PLAN.md — Body endpoint, iframe rendering, CSS/JS integration, CID backfill, and visual verification
 
 ### Phase 8: Thread View
 **Goal**: Users can read an entire email conversation on a single page, with messages displayed chronologically, earlier messages collapsible, and inline images rendering without any new attachment infrastructure
@@ -89,6 +93,6 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 |-------|-----------|----------------|--------|-----------|
 | 1-5. Core Archive | v1.0 | - | Complete | 2026-03-10 |
 | 6. Foundation | 5/5 | Complete   | 2026-03-11 | - |
-| 7. Email Rendering | v1.1 | 0/TBD | Not started | - |
+| 7. Email Rendering | v1.1 | 0/2 | Planning complete | - |
 | 8. Thread View | v1.1 | 0/TBD | Not started | - |
 | 9. Polish | v1.1 | 0/TBD | Not started | - |
