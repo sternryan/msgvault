@@ -24,7 +24,7 @@ Phases 1-5 delivered the complete offline Gmail archiver: full/incremental sync,
 
 - [x] **Phase 6: Foundation** - Adopt PR #176's Templ + HTMX UI, achieve full parity with React SPA, produce single `go build` binary with no npm (completed 2026-03-11)
 - [x] **Phase 7: Email Rendering** - Sanitize and sandbox HTML email bodies; serve inline attachments with CID substitution and external image blocking (completed 2026-03-11)
-- [ ] **Phase 8: Thread View** - Full conversation view with collapsible messages, inline images, and keyboard navigation
+- [x] **Phase 8: Thread View** - Full conversation view with collapsible messages, inline images, and keyboard navigation (completed 2026-03-11)
 - [ ] **Phase 9: Polish** - Text/HTML toggle, loading indicators, CSS bar chart for dashboard, and final validation pass
 
 ## Phase Details
@@ -72,7 +72,7 @@ Plans:
   2. All messages in a conversation appear chronologically on one page, with the most recent message pre-expanded and earlier messages collapsed
   3. Expanding a collapsed message loads its body without a full page reload; inline images display directly, other attachments appear as download links
   4. User can move between messages in the thread using `n` (next) and `p` (previous) keyboard shortcuts
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 08-01-PLAN.md — Thread handler, route, templ template, and collapsible message rendering with lazy-load iframes
@@ -98,5 +98,5 @@ Phases execute in numeric order: 6 → 7 → 8 → 9
 | 1-5. Core Archive | v1.0 | - | Complete | 2026-03-10 |
 | 6. Foundation | 5/5 | Complete   | 2026-03-11 | - |
 | 7. Email Rendering | 2/2 | Complete   | 2026-03-11 | - |
-| 8. Thread View | 1/2 | In Progress|  | - |
+| 8. Thread View | 2/2 | Complete   | 2026-03-11 | - |
 | 9. Polish | v1.1 | 0/TBD | Not started | - |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Web UI Rebuild (Templ + HTMX)
 status: planning
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-03-11T07:18:53.693Z"
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-03-11T07:25:51.325Z"
 last_activity: 2026-03-10 — Roadmap created for v1.1 milestone (phases 6-9)
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
   percent: 20
 ---
 
@@ -54,6 +54,7 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 | Phase 07-email-rendering P01 | 5min | 2 tasks | 12 files |
 | Phase 07-email-rendering P02 | 8min | 3 tasks | 9 files |
 | Phase 08-thread-view P01 | 3min | 2 tasks | 6 files |
+| Phase 08-thread-view P02 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,9 @@ Progress: [██░░░░░░░░] ~20% (v1.0 complete, v1.1 not started
 - [Phase 08-01]: threadView handler pre-computes participants (deduplicated, insertion order) before passing to template
 - [Phase 08-01]: hx-target=closest .email-render-wrapper on Load images in thread context to avoid multi-ID collision
 - [Phase 08-01]: Per-message wrapper IDs (id=email-body-wrapper-{msgID}) in ThreadMessageCard for DOM uniqueness
+- [Phase 08-thread-view]: View thread link renders for any non-zero ConversationID without a thread-size check — single-message threads show the link gracefully
+- [Phase 08-thread-view]: setupThreadHighlight uses data-highlightApplied attribute as one-time guard; safe to re-run on htmx:afterSettle
+- [Phase 08-thread-view]: Multi-iframe resize matches by contentWindow (e.source) with getElementById fallback for robustness
 
 ### Pending Todos
 
@@ -98,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T07:18:53.691Z
-Stopped at: Completed 08-01-PLAN.md
+Last session: 2026-03-11T07:25:51.317Z
+Stopped at: Completed 08-02-PLAN.md
 Resume file: None
