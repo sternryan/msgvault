@@ -1,0 +1,98 @@
+package templates
+
+import (
+	"fmt"
+	"strings"
+	"github.com/wesm/msgvault/internal/query"
+)
+
+// MessageDetailPage renders a full message view with headers, body, and attachments.
+templ MessageDetailPage(msg *query.MessageDetail) {
+	<div class="page-content">
+		<a
+			class="back-link"
+			href="/messages"
+			hx-get="/messages"
+			hx-select="#main-content"
+			hx-target="#main-content"
+			hx-swap="outerHTML"
+			hx-replace-url="true"
+		>&larr; Back to messages</a>
+		<div class="message-detail">
+			<div class="message-headers">
+				<h2 class="message-subject">{ msg.Subject }</h2>
+				<dl class="header-list">
+					if len(msg.From) > 0 {
+						<dt>From</dt>
+						<dd>{ formatAddresses(msg.From) }</dd>
+					}
+					if len(msg.To) > 0 {
+						<dt>To</dt>
+						<dd>{ formatAddresses(msg.To) }</dd>
+					}
+					if len(msg.Cc) > 0 {
+						<dt>Cc</dt>
+						<dd>{ formatAddresses(msg.Cc) }</dd>
+					}
+					if len(msg.Bcc) > 0 {
+						<dt>Bcc</dt>
+						<dd>{ formatAddresses(msg.Bcc) }</dd>
+					}
+					<dt>Date</dt>
+					<dd>{ FormatTime(msg.SentAt) }</dd>
+					<dt>Size</dt>
+					<dd>{ FormatBytes(msg.SizeEstimate) }</dd>
+					if len(msg.Labels) > 0 {
+						<dt>Labels</dt>
+						<dd>
+							<span class="label-list">
+								for _, label := range msg.Labels {
+									<span class="label-tag">{ label }</span>
+								}
+							</span>
+						</dd>
+					}
+				</dl>
+			</div>
+			<div class="message-body">
+				if msg.BodyText != "" {
+					<pre class="body-text">{ msg.BodyText }</pre>
+				} else if msg.BodyHTML != "" {
+					<p class="body-notice">HTML body available — full rendering coming in a future update.</p>
+				} else {
+					<p class="body-empty">No message body available.</p>
+				}
+			</div>
+			if len(msg.Attachments) > 0 {
+				<div class="attachment-list">
+					<h3>Attachments ({ fmt.Sprintf("%d", len(msg.Attachments)) })</h3>
+					<ul>
+						for _, att := range msg.Attachments {
+							<li class="attachment-item">
+								<a
+									href={ templ.SafeURL(fmt.Sprintf("/attachments/%d/download", att.ID)) }
+									class="attachment-link"
+									download={ att.Filename }
+								>{ att.Filename }</a>
+								<span class="attachment-meta">{ att.MimeType } · { FormatBytes(att.Size) }</span>
+							</li>
+						}
+					</ul>
+				</div>
+			}
+		</div>
+	</div>
+}
+
+// formatAddresses formats a slice of addresses as "Name <email>, Name <email>".
+func formatAddresses(addrs []query.Address) string {
+	parts := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		if a.Name != "" {
+			parts = append(parts, fmt.Sprintf("%s <%s>", a.Name, a.Email))
+		} else {
+			parts = append(parts, a.Email)
+		}
+	}
+	return strings.Join(parts, ", ")
+}

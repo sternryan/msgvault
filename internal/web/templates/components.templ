@@ -1,0 +1,122 @@
+package templates
+
+import (
+	"fmt"
+	"net/url"
+)
+
+// Pagination renders a pagination bar with prev/next links and a count label.
+// baseURL should be the current path+params WITHOUT offset.
+templ Pagination(baseURL string, offset, limit int, total int64) {
+	<div class="pagination">
+		<span class="pagination-info">
+			if total == 0 {
+				Showing 0 messages
+			} else {
+				Showing { fmt.Sprintf("%d", offset+1) }–{ fmt.Sprintf("%d", minInt64(int64(offset+limit), total)) } of { FormatNum(total) } messages
+			}
+		</span>
+		<div class="pagination-nav">
+			if offset > 0 {
+				<a
+					class="pagination-link"
+					href={ templ.SafeURL(paginationURL(baseURL, offset-limit, limit)) }
+					hx-get={ paginationURL(baseURL, offset-limit, limit) }
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-replace-url="true"
+				>&larr; Prev</a>
+			} else {
+				<span class="pagination-link pagination-link--disabled">&larr; Prev</span>
+			}
+			if int64(offset+limit) < total {
+				<a
+					class="pagination-link"
+					href={ templ.SafeURL(paginationURL(baseURL, offset+limit, limit)) }
+					hx-get={ paginationURL(baseURL, offset+limit, limit) }
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-replace-url="true"
+				>Next &rarr;</a>
+			} else {
+				<span class="pagination-link pagination-link--disabled">Next &rarr;</span>
+			}
+		</div>
+	</div>
+}
+
+// SortHeader renders a sortable <th> element.
+// field is the URL param value (e.g. "date", "size", "subject").
+// currentField and currentDir are the active sort state.
+// baseURL is the path+params WITHOUT sortField/sortDir/offset.
+templ SortHeader(label, field, currentField, currentDir, baseURL string) {
+	<th
+		class="sortable-header"
+		hx-get={ sortURL(baseURL, field, currentField, currentDir) }
+		hx-select="#main-content"
+		hx-target="#main-content"
+		hx-swap="outerHTML"
+		hx-replace-url="true"
+	>
+		<a href={ templ.SafeURL(sortURL(baseURL, field, currentField, currentDir)) } class="sort-link">
+			{ label }
+			if field == currentField {
+				if currentDir == "asc" {
+					<span class="sort-arrow">&uarr;</span>
+				} else {
+					<span class="sort-arrow">&darr;</span>
+				}
+			}
+		</a>
+	</th>
+}
+
+// paginationURL builds a URL with offset replaced in the query string.
+func paginationURL(baseURL string, newOffset, limit int) string {
+	if newOffset < 0 {
+		newOffset = 0
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return baseURL
+	}
+	q := u.Query()
+	q.Set("offset", fmt.Sprintf("%d", newOffset))
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// sortURL builds a URL that sorts by the given field.
+// If field == currentField, it reverses the direction. Otherwise defaults to desc.
+func sortURL(baseURL, field, currentField, currentDir string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return baseURL
+	}
+	q := u.Query()
+	q.Del("offset") // reset to first page when sorting changes
+	if field == currentField {
+		// toggle direction
+		if currentDir == "asc" {
+			q.Set("sortDir", "desc")
+		} else {
+			q.Set("sortDir", "asc")
+		}
+	} else {
+		q.Set("sortDir", "desc")
+	}
+	q.Set("sortField", field)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// minInt64 returns the smaller of a and b.
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}

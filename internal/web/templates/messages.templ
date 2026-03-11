@@ -1,0 +1,93 @@
+package templates
+
+import (
+	"fmt"
+	"github.com/wesm/msgvault/internal/query"
+)
+
+// MessagesPage renders the paginated message list with sortable column headers.
+templ MessagesPage(messages []query.MessageSummary, filter query.MessageFilter, total int64, baseURL string) {
+	<div class="page-content">
+		<div class="page-header">
+			<h2 class="page-title">Messages</h2>
+		</div>
+		if len(messages) == 0 && total == 0 {
+			<div class="empty-state">
+				<p>No messages found.</p>
+			</div>
+		} else {
+			<table class="data-table messages-table">
+				<thead>
+					<tr>
+						<th>From</th>
+						@SortHeader("Subject", "subject", messageSortFieldStr(filter.Sorting.Field), sortDirStr(filter.Sorting.Direction), baseURL)
+						@SortHeader("Date", "date", messageSortFieldStr(filter.Sorting.Field), sortDirStr(filter.Sorting.Direction), baseURL)
+						@SortHeader("Size", "size", messageSortFieldStr(filter.Sorting.Field), sortDirStr(filter.Sorting.Direction), baseURL)
+						<th title="Attachments">Att.</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, msg := range messages {
+						<tr
+							class="clickable-row message-row"
+							data-href={ fmt.Sprintf("/messages/%d", msg.ID) }
+							hx-get={ fmt.Sprintf("/messages/%d", msg.ID) }
+							hx-select="#main-content"
+							hx-target="#main-content"
+							hx-swap="outerHTML"
+							hx-replace-url="true"
+						>
+							<td class="col-from" title={ msg.FromEmail }>{ truncateStr(displayFrom(msg.FromName, msg.FromEmail), 30) }</td>
+							<td class="col-subject" title={ msg.Snippet }>{ truncateStr(msg.Subject, 60) }</td>
+							<td class="col-date">{ FormatDate(msg.SentAt) }</td>
+							<td class="col-size">{ FormatBytes(msg.SizeEstimate) }</td>
+							<td class="col-att">
+								if msg.HasAttachments {
+									{ fmt.Sprintf("%d", msg.AttachmentCount) }
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			@Pagination(baseURL, filter.Pagination.Offset, filter.Pagination.Limit, total)
+		}
+	</div>
+}
+
+// displayFrom returns the display name if non-empty, otherwise the email address.
+func displayFrom(name, email string) string {
+	if name != "" {
+		return name
+	}
+	return email
+}
+
+// truncateStr truncates s to at most maxLen characters, appending "…" if truncated.
+func truncateStr(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-1]) + "…"
+}
+
+// messageSortFieldStr returns the URL parameter string for the given sort field.
+func messageSortFieldStr(f query.MessageSortField) string {
+	switch f {
+	case query.MessageSortBySize:
+		return "size"
+	case query.MessageSortBySubject:
+		return "subject"
+	default:
+		return "date"
+	}
+}
+
+// sortDirStr returns "asc" or "desc" for the given sort direction.
+func sortDirStr(d query.SortDirection) string {
+	if d == query.SortAsc {
+		return "asc"
+	}
+	return "desc"
+}
