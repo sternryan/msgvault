@@ -67,9 +67,9 @@ Examples:
 
 		// Build message filter
 		filter := query.MessageFilter{
-			Domain: stageDomain,
-			Sender: stageSender,
-			Label:  stageLabel,
+			Domain:   stageDomain,
+			Sender:   stageSender,
+			Label:    stageLabel,
 			SourceID: &source.ID,
 		}
 

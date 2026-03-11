@@ -158,7 +158,7 @@ templ ThreadMessageCard(msg query.MessageSummary, isLatest bool, highlightID int
 			</summary>
 			<div
 				class="thread-message-body"
-				hx-get={ fmt.Sprintf("/messages/%d/body-wrapper", msg.ID) }
+				hx-get={ fmt.Sprintf("/messages/%d/body-wrapper?wrapperID=email-body-wrapper-%d", msg.ID, msg.ID) }
 				hx-trigger="toggle once"
 				hx-swap="innerHTML"
 				hx-indicator="#page-indicator"

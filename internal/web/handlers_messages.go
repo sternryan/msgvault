@@ -110,6 +110,10 @@ func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 
 	format := r.URL.Query().Get("format")
 	showImages := r.URL.Query().Get("showImages") == "true"
+	wrapperID := r.URL.Query().Get("wrapperID")
+	if wrapperID == "" {
+		wrapperID = "email-body-wrapper"
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
@@ -127,13 +131,14 @@ func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 					` hx-replace-url="/messages/%d?format=html">HTML</a>`,
 				id, id)
 		}
-		fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+		fmt.Fprintf(w, `<div id="%s" class="email-render-wrapper">`+
 			`<div class="email-toolbar">`+
 			`<span class="email-toolbar-btn active">Text</span>`+
 			`%s`+
 			`</div>`+
 			`<pre class="body-text-pre">%s</pre>`+
 			`</div>`,
+			wrapperID,
 			htmlBtn,
 			html.EscapeString(msg.BodyText))
 		return
@@ -175,7 +180,7 @@ func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 						`</div>`,
 					id, id)
 			}
-			fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+			fmt.Fprintf(w, `<div id="%s" class="email-render-wrapper">`+
 				`%s`+
 				`<iframe id="email-body-frame"`+
 				` src="/messages/%d/body?showImages=true"`+
@@ -185,7 +190,7 @@ func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 				` frameborder="0"`+
 				`></iframe>`+
 				`</div>`,
-				toolbarHTML, id)
+				wrapperID, toolbarHTML, id)
 		} else {
 			bannerHTML := fmt.Sprintf(
 				`<div class="email-images-banner">`+
@@ -199,7 +204,7 @@ func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 			if hasBothFormats {
 				// Toolbar unifies format toggle + images banner — no separate banner
 				bannerHTML = ""
-				fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+				fmt.Fprintf(w, `<div id="%s" class="email-render-wrapper">`+
 					`%s`+
 					`<iframe id="email-body-frame"`+
 					` src="/messages/%d/body"`+
@@ -209,9 +214,9 @@ func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 					` frameborder="0"`+
 					`></iframe>`+
 					`</div>`,
-					toolbarHTML, id)
+					wrapperID, toolbarHTML, id)
 			} else {
-				fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+				fmt.Fprintf(w, `<div id="%s" class="email-render-wrapper">`+
 					`%s`+
 					`<iframe id="email-body-frame"`+
 					` src="/messages/%d/body"`+
@@ -221,7 +226,7 @@ func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 					` frameborder="0"`+
 					`></iframe>`+
 					`</div>`,
-					bannerHTML, id)
+					wrapperID, bannerHTML, id)
 			}
 		}
 		return
@@ -229,16 +234,17 @@ func (h *handlers) messageBodyWrapper(w http.ResponseWriter, r *http.Request) {
 
 	// Fallback: only text body available
 	if msg.BodyText != "" {
-		fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+		fmt.Fprintf(w, `<div id="%s" class="email-render-wrapper">`+
 			`<pre class="body-text-pre">%s</pre>`+
 			`</div>`,
+			wrapperID,
 			html.EscapeString(msg.BodyText))
 		return
 	}
 
-	fmt.Fprintf(w, `<div id="email-body-wrapper" class="email-render-wrapper">`+
+	fmt.Fprintf(w, `<div id="%s" class="email-render-wrapper">`+
 		`<p class="body-empty">No message body available.</p>`+
-		`</div>`)
+		`</div>`, wrapperID)
 }
 
 func (h *handlers) messagesList(w http.ResponseWriter, r *http.Request) {
