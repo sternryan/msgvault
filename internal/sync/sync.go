@@ -673,7 +673,7 @@ func (s *Syncer) storeAttachment(messageID int64, att *mime.Attachment) error {
 	}
 
 	// Record in database
-	return s.store.UpsertAttachment(messageID, att.Filename, att.ContentType, storagePath, att.ContentHash, len(att.Content))
+	return s.store.UpsertAttachment(messageID, att.Filename, att.ContentType, storagePath, att.ContentHash, att.ContentID, len(att.Content))
 }
 
 // joinEmails concatenates email addresses from a slice of mime.Address with spaces.

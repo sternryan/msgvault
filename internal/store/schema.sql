@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS attachments (
 
     -- Content-addressed storage (deduplication)
     content_hash TEXT,              -- SHA-256 of content
+    content_id TEXT,                -- MIME Content-ID for inline images (e.g. <img001@example.com>)
     storage_path TEXT NOT NULL,     -- relative path: ab/abcd1234...
 
     -- Media metadata

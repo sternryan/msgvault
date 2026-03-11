@@ -819,7 +819,9 @@ func (s *Store) backfillFTSBatch(fromID, toID int64) (int64, error) {
 }
 
 // UpsertAttachment stores an attachment record.
-func (s *Store) UpsertAttachment(messageID int64, filename, mimeType, storagePath, contentHash string, size int) error {
+// contentID is the MIME Content-ID header value (e.g. "<img001@example.com>") used for
+// inline CID image resolution. Pass "" if no Content-ID is present.
+func (s *Store) UpsertAttachment(messageID int64, filename, mimeType, storagePath, contentHash, contentID string, size int) error {
 	// Check if attachment already exists (by message_id and content_hash)
 	var existingID int64
 	err := s.db.QueryRow(`
@@ -827,7 +829,13 @@ func (s *Store) UpsertAttachment(messageID int64, filename, mimeType, storagePat
 	`, messageID, contentHash).Scan(&existingID)
 
 	if err == nil {
-		// Already exists, nothing to do
+		// Already exists — update content_id if we now have one and it wasn't set before
+		if contentID != "" {
+			_, _ = s.db.Exec(
+				`UPDATE attachments SET content_id = ? WHERE id = ? AND (content_id IS NULL OR content_id = '')`,
+				contentID, existingID,
+			)
+		}
 		return nil
 	}
 	if err != sql.ErrNoRows {
@@ -836,8 +844,8 @@ func (s *Store) UpsertAttachment(messageID int64, filename, mimeType, storagePat
 
 	// Insert new attachment
 	_, err = s.db.Exec(`
-		INSERT INTO attachments (message_id, filename, mime_type, storage_path, content_hash, size, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-	`, messageID, filename, mimeType, storagePath, contentHash, size)
+		INSERT INTO attachments (message_id, filename, mime_type, storage_path, content_hash, content_id, size, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+	`, messageID, filename, mimeType, storagePath, contentHash, contentID, size)
 	return err
 }
