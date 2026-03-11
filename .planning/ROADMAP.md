@@ -27,7 +27,7 @@ Phases 1-5 delivered the complete offline Gmail archiver: full/incremental sync,
 - [x] **Phase 8: Thread View** - Full conversation view with collapsible messages, inline images, and keyboard navigation (completed 2026-03-11)
 - [x] **Phase 9: Polish** - Text/HTML toggle, loading indicators, CSS bar chart for dashboard, and final validation pass (completed 2026-03-11)
 - [x] **Phase 10: Integration Test & DOM Cleanup** - Fix stale test assertions and duplicate DOM IDs from cross-phase integration (completed 2026-03-11)
-- [ ] **Phase 11: Keyboard Selector Fix & Cleanup** - Fix DOM selector mismatches in keys.js so j/k/Enter row nav and s/r sort cycling work on all pages
+- [x] **Phase 11: Keyboard Selector Fix & Cleanup** - Fix DOM selector mismatches in keys.js so j/k/Enter row nav and s/r sort cycling work on all pages (completed 2026-03-11)
 
 ## Phase Details
 
@@ -119,7 +119,7 @@ Plans:
   3. `go mod tidy` produces no changes (bluemonday correctly classified)
   4. 09-02-SUMMARY.md frontmatter includes POLISH-03 in `requirements_completed`
   5. `go test ./internal/web/...` passes with no failures
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [ ] 11-01-PLAN.md — Fix keys.js selectors (data-row to data-href, sort-header to sortable-header), add data-sort-field + active class to SortHeader, go mod tidy, SUMMARY frontmatter fix
@@ -137,4 +137,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10 → 11
 | 8. Thread View | 2/2 | Complete   | 2026-03-11 | - |
 | 9. Polish | 2/2 | Complete   | 2026-03-11 | - |
 | 10. Integration Test & DOM Cleanup | 1/1 | Complete    | 2026-03-11 | - |
-| 11. Keyboard Selector Fix & Cleanup | 0/1 | Not Started | - | - |
+| 11. Keyboard Selector Fix & Cleanup | 1/1 | Complete   | 2026-03-11 | - |
