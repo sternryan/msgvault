@@ -27,6 +27,7 @@ Phases 1-5 delivered the complete offline Gmail archiver: full/incremental sync,
 - [x] **Phase 8: Thread View** - Full conversation view with collapsible messages, inline images, and keyboard navigation (completed 2026-03-11)
 - [x] **Phase 9: Polish** - Text/HTML toggle, loading indicators, CSS bar chart for dashboard, and final validation pass (completed 2026-03-11)
 - [x] **Phase 10: Integration Test & DOM Cleanup** - Fix stale test assertions and duplicate DOM IDs from cross-phase integration (completed 2026-03-11)
+- [ ] **Phase 11: Keyboard Selector Fix & Cleanup** - Fix DOM selector mismatches in keys.js so j/k/Enter row nav and s/r sort cycling work on all pages
 
 ## Phase Details
 
@@ -107,6 +108,20 @@ Plans:
 Plans:
 - [ ] 10-01-PLAN.md — Fix stale test assertions (INT-01) and duplicate DOM IDs in thread lazy-load (INT-02)
 
+### Phase 11: Keyboard Selector Fix & Cleanup
+**Goal**: Keyboard shortcuts j/k/Enter (row navigation) and s/r (sort cycling) work correctly on all pages — DOM selectors in keys.js match the attributes emitted by Templ templates
+**Depends on**: Phase 10
+**Requirements**: PARITY-07, POLISH-03 (doc fix)
+**Gap Closure:** Closes INT-03, INT-04, INT-05, PARITY-07, POLISH-03 from v1.1 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. Pressing j/k on messages, aggregate, search, and dashboard pages moves the active row highlight and Enter opens the selected row
+  2. Pressing s on a page with sort headers cycles the sort field; pressing r reverses sort direction
+  3. `go mod tidy` produces no changes (bluemonday correctly classified)
+  4. 09-02-SUMMARY.md frontmatter includes POLISH-03 in `requirements_completed`
+  5. `go test ./internal/web/...` passes with no failures
+
+Plans: (to be planned)
+
 ## Progress
 
 **Execution Order:**
@@ -120,3 +135,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 8. Thread View | 2/2 | Complete   | 2026-03-11 | - |
 | 9. Polish | 2/2 | Complete   | 2026-03-11 | - |
 | 10. Integration Test & DOM Cleanup | 1/1 | Complete    | 2026-03-11 | - |
+| 11. Keyboard Selector Fix & Cleanup | 0/0 | Not Started | - | - |
