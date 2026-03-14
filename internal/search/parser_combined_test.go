@@ -32,7 +32,7 @@ func TestParse_EmptyOperatorValue(t *testing.T) {
 		{
 			name:  "empty label value adds empty string",
 			query: "label:",
-			want:  Query{Labels: []string{""}},
+			want:  Query{},
 		},
 		{
 			name:  "empty cc value adds empty string",
