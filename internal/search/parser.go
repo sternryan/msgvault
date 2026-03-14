@@ -46,72 +46,88 @@ func (q *Query) IsEmpty() bool {
 		q.SmallerThan == nil
 }
 
-// operatorFn handles a parsed operator:value pair by applying it to the query.
-type operatorFn func(q *Query, value string, now time.Time)
+// toLowerFast returns a lowercase ASCII version of s, avoiding allocation
+// when s is already lowercase (the common case for operator names).
+func toLowerFast(s string) string {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			// Found uppercase: allocate and convert the rest.
+			b := make([]byte, len(s))
+			copy(b, s[:i])
+			b[i] = c + 32
+			for i++; i < len(s); i++ {
+				c = s[i]
+				if c >= 'A' && c <= 'Z' {
+					b[i] = c + 32
+				} else {
+					b[i] = c
+				}
+			}
+			return string(b)
+		}
+	}
+	return s // already lowercase, no allocation
+}
 
-// operators maps operator names to their handler functions.
-var operators = map[string]operatorFn{
-	"from": func(q *Query, v string, _ time.Time) {
-		q.FromAddrs = append(q.FromAddrs, strings.ToLower(v))
-	},
-	"to": func(q *Query, v string, _ time.Time) {
-		q.ToAddrs = append(q.ToAddrs, strings.ToLower(v))
-	},
-	"cc": func(q *Query, v string, _ time.Time) {
-		q.CcAddrs = append(q.CcAddrs, strings.ToLower(v))
-	},
-	"bcc": func(q *Query, v string, _ time.Time) {
-		q.BccAddrs = append(q.BccAddrs, strings.ToLower(v))
-	},
-	"subject": func(q *Query, v string, _ time.Time) {
-		q.SubjectTerms = append(q.SubjectTerms, v)
-	},
-	"label": func(q *Query, v string, _ time.Time) {
-		if v = strings.TrimSpace(v); v != "" {
+// applyOperator dispatches the operator:value pair to the appropriate handler
+// using a switch statement, which compiles to an efficient jump table and avoids
+// the overhead of map hashing and indirect function calls.
+func applyOperator(q *Query, op, value string, now *time.Time) bool {
+	switch op {
+	case "from":
+		q.FromAddrs = append(q.FromAddrs, strings.ToLower(value))
+	case "to":
+		q.ToAddrs = append(q.ToAddrs, strings.ToLower(value))
+	case "cc":
+		q.CcAddrs = append(q.CcAddrs, strings.ToLower(value))
+	case "bcc":
+		q.BccAddrs = append(q.BccAddrs, strings.ToLower(value))
+	case "subject":
+		q.SubjectTerms = append(q.SubjectTerms, value)
+	case "label", "l":
+		if v := strings.TrimSpace(value); v != "" {
 			q.Labels = append(q.Labels, v)
 		}
-	},
-	"l": func(q *Query, v string, _ time.Time) {
-		if v = strings.TrimSpace(v); v != "" {
-			q.Labels = append(q.Labels, v)
-		}
-	},
-	"has": func(q *Query, v string, _ time.Time) {
-		if low := strings.ToLower(v); low == "attachment" || low == "attachments" {
+	case "has":
+		if low := strings.ToLower(value); low == "attachment" || low == "attachments" {
 			b := true
 			q.HasAttachment = &b
 		}
-	},
-	"before": func(q *Query, v string, _ time.Time) {
-		if t := parseDate(v); t != nil {
+	case "before":
+		if t := parseDate(value); t != nil {
 			q.BeforeDate = t
 		}
-	},
-	"after": func(q *Query, v string, _ time.Time) {
-		if t := parseDate(v); t != nil {
+	case "after":
+		if t := parseDate(value); t != nil {
 			q.AfterDate = t
 		}
-	},
-	"older_than": func(q *Query, v string, now time.Time) {
-		if t := parseRelativeDate(v, now); t != nil {
+	case "older_than":
+		if now.IsZero() {
+			*now = time.Now().UTC()
+		}
+		if t := parseRelativeDate(value, *now); t != nil {
 			q.BeforeDate = t
 		}
-	},
-	"newer_than": func(q *Query, v string, now time.Time) {
-		if t := parseRelativeDate(v, now); t != nil {
+	case "newer_than":
+		if now.IsZero() {
+			*now = time.Now().UTC()
+		}
+		if t := parseRelativeDate(value, *now); t != nil {
 			q.AfterDate = t
 		}
-	},
-	"larger": func(q *Query, v string, _ time.Time) {
-		if size := parseSize(v); size != nil {
+	case "larger":
+		if size := parseSize(value); size != nil {
 			q.LargerThan = size
 		}
-	},
-	"smaller": func(q *Query, v string, _ time.Time) {
-		if size := parseSize(v); size != nil {
+	case "smaller":
+		if size := parseSize(value); size != nil {
 			q.SmallerThan = size
 		}
-	},
+	default:
+		return false
+	}
+	return true
 }
 
 // Parser holds configuration for query parsing.
@@ -156,16 +172,10 @@ func (p *Parser) Parse(queryStr string) *Query {
 		}
 
 		if idx := strings.Index(token, ":"); idx != -1 {
-			op := strings.ToLower(token[:idx])
+			op := toLowerFast(token[:idx])
 			value := unquote(token[idx+1:])
 
-			if handler, ok := operators[op]; ok {
-				// Lazily fetch time only for operators that need it.
-				if now.IsZero() && (op == "older_than" || op == "newer_than") {
-					now = time.Now().UTC()
-				}
-				handler(q, value, now)
-			} else {
+			if !applyOperator(q, op, value, &now) {
 				q.TextTerms = append(q.TextTerms, token)
 			}
 			continue
@@ -205,7 +215,7 @@ func isQuotedPhrase(token string) bool {
 // Handles cases like subject:"foo bar" where the operator and quoted value should stay together.
 //
 // Uses byte-level iteration instead of rune-level: the only characters with special
-// meaning ('"', '\'', ' ', ':') are single-byte ASCII, and multi-byte UTF-8 sequences
+// meaning ('"', '\”, ' ', ':') are single-byte ASCII, and multi-byte UTF-8 sequences
 // never contain those byte values, so byte-by-byte processing is both correct and
 // avoids the UTF-8 decoding overhead of a range loop plus the ASCII branch in WriteRune.
 func tokenize(queryStr string) []string {
