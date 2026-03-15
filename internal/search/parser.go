@@ -7,13 +7,6 @@ import (
 	"time"
 )
 
-var dateFormats = [...]string{
-	"2006-01-02",
-	"2006/01/02",
-	"01/02/2006",
-	"02/01/2006",
-}
-
 type Query struct {
 	TextTerms     []string
 	FromAddrs     []string
@@ -72,56 +65,61 @@ var trueVal = true
 // matchHasAttachment checks if value is "attachment" or "attachments"
 // case-insensitively.
 func matchHasAttachment(s string) bool {
-	ls := toLowerFast(s)
-	return ls == "attachment" || ls == "attachments"
+	n := len(s)
+	if n == 10 {
+		return s[0]|0x20 == 'a' && s[1]|0x20 == 't' && s[2]|0x20 == 't' &&
+			s[3]|0x20 == 'a' && s[4]|0x20 == 'c' && s[5]|0x20 == 'h' &&
+			s[6]|0x20 == 'm' && s[7]|0x20 == 'e' && s[8]|0x20 == 'n' &&
+			s[9]|0x20 == 't'
+	}
+	if n == 11 {
+		return s[0]|0x20 == 'a' && s[1]|0x20 == 't' && s[2]|0x20 == 't' &&
+			s[3]|0x20 == 'a' && s[4]|0x20 == 'c' && s[5]|0x20 == 'h' &&
+			s[6]|0x20 == 'm' && s[7]|0x20 == 'e' && s[8]|0x20 == 'n' &&
+			s[9]|0x20 == 't' && s[10]|0x20 == 's'
+	}
+	return false
 }
 
 // queryStore bundles all per-Parse allocations into a single heap object.
+// Uses a single flat buffer for all slice backing arrays.
 type queryStore struct {
 	query       Query
 	beforeDate  time.Time
 	afterDate   time.Time
 	largerThan  int64
 	smallerThan int64
-	textBuf     [4]string
-	fromBuf     [2]string
-	toBuf       [2]string
-	ccBuf       [1]string
-	bccBuf      [1]string
-	subjectBuf  [2]string
-	labelBuf    [2]string
+	buf         [8]string // [0:3]=TextTerms, [3]=From, [4]=To, [5]=Cc, [6]=Subject, [7]=Label
 }
 
 func newQueryStore() *queryStore {
 	s := &queryStore{}
 	q := &s.query
-	q.TextTerms = s.textBuf[:0]
-	q.FromAddrs = s.fromBuf[:0]
-	q.ToAddrs = s.toBuf[:0]
-	q.CcAddrs = s.ccBuf[:0]
-	q.BccAddrs = s.bccBuf[:0]
-	q.SubjectTerms = s.subjectBuf[:0]
-	q.Labels = s.labelBuf[:0]
+	q.TextTerms = s.buf[0:0:3]
+	q.FromAddrs = s.buf[3:3:4]
+	q.ToAddrs = s.buf[4:4:5]
+	q.CcAddrs = s.buf[5:5:6]
+	q.SubjectTerms = s.buf[6:6:7]
+	q.Labels = s.buf[7:7:8]
 	return s
 }
 
-// dispatchToken processes a single token. colonRel is the position of the
-// first colon relative to token start (-1 if none). Performs inline operator
-// matching and value dispatch in a single switch, avoiding a separate function
-// call for operator identification.
+// dispatchToken processes a single token with inline operator matching.
 func dispatchToken(s *queryStore, token string, colonRel int, now *time.Time) {
 	q := &s.query
 	if colonRel < 0 {
 		q.TextTerms = append(q.TextTerms, token)
 		return
 	}
-	opN := colonRel
-	value := unquote(token[colonRel+1:])
-	switch opN {
+	value := token[colonRel+1:]
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		value = value[1 : len(value)-1]
+	}
+	switch colonRel {
 	case 1:
 		if token[0]|0x20 == 'l' {
-			if v := strings.TrimSpace(value); v != "" {
-				q.Labels = append(q.Labels, v)
+			if len(value) > 0 {
+				q.Labels = append(q.Labels, value)
 			}
 			return
 		}
@@ -155,29 +153,33 @@ func dispatchToken(s *queryStore, token string, colonRel int, now *time.Time) {
 	case 5:
 		b0 := token[0] | 0x20
 		if b0 == 'l' && token[1]|0x20 == 'a' && token[2]|0x20 == 'b' && token[3]|0x20 == 'e' && token[4]|0x20 == 'l' {
-			if v := strings.TrimSpace(value); v != "" {
-				q.Labels = append(q.Labels, v)
+			if len(value) > 0 {
+				q.Labels = append(q.Labels, value)
 			}
 			return
 		}
 		if b0 == 'a' && token[1]|0x20 == 'f' && token[2]|0x20 == 't' && token[3]|0x20 == 'e' && token[4]|0x20 == 'r' {
-			if t, ok := parseDateValue(value); ok {
-				s.afterDate = t
-				q.AfterDate = &s.afterDate
+			if len(value) == 10 {
+				if t, ok := parseDateInline(value); ok {
+					s.afterDate = t
+					q.AfterDate = &s.afterDate
+				}
 			}
 			return
 		}
 	case 6:
 		b0 := token[0] | 0x20
 		if b0 == 'b' && token[1]|0x20 == 'e' && token[2]|0x20 == 'f' && token[3]|0x20 == 'o' && token[4]|0x20 == 'r' && token[5]|0x20 == 'e' {
-			if t, ok := parseDateValue(value); ok {
-				s.beforeDate = t
-				q.BeforeDate = &s.beforeDate
+			if len(value) == 10 {
+				if t, ok := parseDateInline(value); ok {
+					s.beforeDate = t
+					q.BeforeDate = &s.beforeDate
+				}
 			}
 			return
 		}
 		if b0 == 'l' && token[1]|0x20 == 'a' && token[2]|0x20 == 'r' && token[3]|0x20 == 'g' && token[4]|0x20 == 'e' && token[5]|0x20 == 'r' {
-			if v, ok := parseSizeValue(value); ok {
+			if v, ok := parseSizeFast(value); ok {
 				s.largerThan = v
 				q.LargerThan = &s.largerThan
 			}
@@ -191,7 +193,7 @@ func dispatchToken(s *queryStore, token string, colonRel int, now *time.Time) {
 				return
 			}
 			if b1 == 'm' && token[2]|0x20 == 'a' && token[3]|0x20 == 'l' && token[4]|0x20 == 'l' && token[5]|0x20 == 'e' && token[6]|0x20 == 'r' {
-				if v, ok := parseSizeValue(value); ok {
+				if v, ok := parseSizeFast(value); ok {
 					s.smallerThan = v
 					q.SmallerThan = &s.smallerThan
 				}
@@ -250,16 +252,116 @@ func (p *Parser) Parse(queryStr string) *Query {
 
 	start := 0
 	colonRel := -1
-	for i := 0; i < n; i++ {
-		b := queryStr[i]
+	for i := 0; i <= n; i++ {
+		b := byte(' ')
+		if i < n {
+			b = queryStr[i]
+			if b > ':' {
+				continue
+			}
+		}
 		if b == ' ' {
 			if i > start {
-				dispatchToken(s, queryStr[start:i], colonRel, &now)
+				if colonRel < 0 {
+					q.TextTerms = append(q.TextTerms, queryStr[start:i])
+				} else {
+					token := queryStr[start:i]
+					value := token[colonRel+1:]
+					switch colonRel {
+					case 1:
+						if token[0]|0x20 == 'l' {
+							if len(value) > 0 {
+								q.Labels = append(q.Labels, value)
+							}
+						} else {
+							q.TextTerms = append(q.TextTerms, token)
+						}
+					case 2:
+						c0, c1 := token[0]|0x20, token[1]|0x20
+						if c0 == 't' && c1 == 'o' {
+							q.ToAddrs = append(q.ToAddrs, toLowerFast(value))
+						} else if c0 == 'c' && c1 == 'c' {
+							q.CcAddrs = append(q.CcAddrs, toLowerFast(value))
+						} else {
+							q.TextTerms = append(q.TextTerms, token)
+						}
+					case 3:
+						c0, c1, c2 := token[0]|0x20, token[1]|0x20, token[2]|0x20
+						if c0 == 'h' && c1 == 'a' && c2 == 's' {
+							if matchHasAttachment(value) {
+								q.HasAttachment = &trueVal
+							}
+						} else if c0 == 'b' && c1 == 'c' && c2 == 'c' {
+							q.BccAddrs = append(q.BccAddrs, toLowerFast(value))
+						} else {
+							q.TextTerms = append(q.TextTerms, token)
+						}
+					case 4:
+						if token[0]|0x20 == 'f' && token[1]|0x20 == 'r' && token[2]|0x20 == 'o' && token[3]|0x20 == 'm' {
+							q.FromAddrs = append(q.FromAddrs, toLowerFast(value))
+						} else {
+							q.TextTerms = append(q.TextTerms, token)
+						}
+					case 5:
+						c0 := token[0] | 0x20
+						if c0 == 'l' && token[1]|0x20 == 'a' && token[2]|0x20 == 'b' && token[3]|0x20 == 'e' && token[4]|0x20 == 'l' {
+							if len(value) > 0 {
+								q.Labels = append(q.Labels, value)
+							}
+						} else if c0 == 'a' && token[1]|0x20 == 'f' && token[2]|0x20 == 't' && token[3]|0x20 == 'e' && token[4]|0x20 == 'r' {
+							if len(value) == 10 {
+								if t, ok := parseDateInline(value); ok {
+									s.afterDate = t
+									q.AfterDate = &s.afterDate
+								}
+							}
+						} else {
+							q.TextTerms = append(q.TextTerms, token)
+						}
+					case 6:
+						c0 := token[0] | 0x20
+						if c0 == 'b' && token[1]|0x20 == 'e' && token[2]|0x20 == 'f' && token[3]|0x20 == 'o' && token[4]|0x20 == 'r' && token[5]|0x20 == 'e' {
+							if len(value) == 10 {
+								if t, ok := parseDateInline(value); ok {
+									s.beforeDate = t
+									q.BeforeDate = &s.beforeDate
+								}
+							}
+						} else if c0 == 'l' && token[1]|0x20 == 'a' && token[2]|0x20 == 'r' && token[3]|0x20 == 'g' && token[4]|0x20 == 'e' && token[5]|0x20 == 'r' {
+							if v, ok := parseSizeFast(value); ok {
+								s.largerThan = v
+								q.LargerThan = &s.largerThan
+							}
+						} else {
+							q.TextTerms = append(q.TextTerms, token)
+						}
+					case 7:
+						c0, c1 := token[0]|0x20, token[1]|0x20
+						if c0 == 's' {
+							if c1 == 'u' && token[2]|0x20 == 'b' && token[3]|0x20 == 'j' && token[4]|0x20 == 'e' && token[5]|0x20 == 'c' && token[6]|0x20 == 't' {
+								q.SubjectTerms = append(q.SubjectTerms, value)
+							} else if c1 == 'm' && token[2]|0x20 == 'a' && token[3]|0x20 == 'l' && token[4]|0x20 == 'l' && token[5]|0x20 == 'e' && token[6]|0x20 == 'r' {
+								if v, ok := parseSizeFast(value); ok {
+									s.smallerThan = v
+									q.SmallerThan = &s.smallerThan
+								}
+							} else {
+								q.TextTerms = append(q.TextTerms, token)
+							}
+						} else {
+							q.TextTerms = append(q.TextTerms, token)
+						}
+					default:
+						dispatchToken(s, token, colonRel, &now)
+					}
+				}
 			}
 			start = i + 1
 			colonRel = -1
-		} else if b == ':' && colonRel < 0 {
-			colonRel = i - start
+		} else if b == ':' {
+			if colonRel < 0 {
+				colonRel = i - start
+			}
 		} else if b == '"' || b == '\'' {
 			afterColon := i > start && queryStr[i-1] == ':'
 			if !afterColon && i > start {
@@ -289,9 +391,6 @@ func (p *Parser) Parse(queryStr string) *Query {
 				return q
 			}
 		}
-	}
-	if start < n {
-		dispatchToken(s, queryStr[start:], colonRel, &now)
 	}
 	return q
 }
@@ -402,41 +501,67 @@ func tokenize(queryStr string) []string {
 	return tokens
 }
 
-// dateToUnixDays computes days since Unix epoch (1970-01-01) for a valid date.
-// Uses the civil_from_days algorithm (Howard Hinnant). Inputs must be valid
-// (month 1-12, day 1-31, year >= 1) — no normalization is performed.
+// dateToUnixDays computes days since Unix epoch (1970-01-01).
+// Uses int arithmetic to stay within the Go compiler's inlining budget.
 func dateToUnixDays(year, month, day int) int64 {
-	y := int64(year)
-	m := int64(month)
-	if m <= 2 {
-		y--
-	}
-	era := y / 400
-	yoe := y - era*400
-	var doy int64
-	if m > 2 {
-		doy = (153*(m-3)+2)/5 + int64(day) - 1
+	if month <= 2 {
+		year--
+		month += 9
 	} else {
-		doy = (153*(m+9)+2)/5 + int64(day) - 1
+		month -= 3
 	}
+	era := year / 400
+	yoe := year - era*400
+	doy := (153*month+2)/5 + day - 1
 	doe := yoe*365 + yoe/4 - yoe/100 + doy
-	return era*146097 + doe - 719468
+	return int64(era)*146097 + int64(doe) - 719468
 }
 
-// makeUTCDate constructs a UTC time.Time from year/month/day without the
-// overhead of time.Date's normalization logic. Uses dateToUnixDays + time.Unix.
 func makeUTCDate(year, month, day int) time.Time {
 	return time.Unix(dateToUnixDays(year, month, day)*86400, 0).UTC()
 }
 
-// digits2 parses a 2-digit decimal number from s[0:2].
 func digits2(s string) int {
 	return int(s[0]-'0')*10 + int(s[1]-'0')
 }
 
-// digits4 parses a 4-digit decimal number from s[0:4].
 func digits4(s string) int {
 	return int(s[0]-'0')*1000 + int(s[1]-'0')*100 + int(s[2]-'0')*10 + int(s[3]-'0')
+}
+
+// parseDateInline is a fast-path date parser that skips TrimSpace and
+// inlines digit extraction. Caller must ensure len(value)==10.
+func parseDateInline(value string) (time.Time, bool) {
+	if value[4] == '-' && value[7] == '-' {
+		y := int(value[0]-'0')*1000 + int(value[1]-'0')*100 + int(value[2]-'0')*10 + int(value[3]-'0')
+		m := int(value[5]-'0')*10 + int(value[6]-'0')
+		d := int(value[8]-'0')*10 + int(value[9]-'0')
+		if m >= 1 && m <= 12 && d >= 1 && d <= 31 {
+			return time.Unix(dateToUnixDays(y, m, d)*86400, 0).UTC(), true
+		}
+		return time.Time{}, false
+	}
+	if value[4] == '/' && value[7] == '/' {
+		y := int(value[0]-'0')*1000 + int(value[1]-'0')*100 + int(value[2]-'0')*10 + int(value[3]-'0')
+		m := int(value[5]-'0')*10 + int(value[6]-'0')
+		d := int(value[8]-'0')*10 + int(value[9]-'0')
+		if m >= 1 && m <= 12 && d >= 1 && d <= 31 {
+			return time.Unix(dateToUnixDays(y, m, d)*86400, 0).UTC(), true
+		}
+		return time.Time{}, false
+	}
+	if value[2] == '/' && value[5] == '/' {
+		a := int(value[0]-'0')*10 + int(value[1]-'0')
+		b := int(value[3]-'0')*10 + int(value[4]-'0')
+		y := int(value[6]-'0')*1000 + int(value[7]-'0')*100 + int(value[8]-'0')*10 + int(value[9]-'0')
+		if a >= 1 && a <= 12 && b >= 1 && b <= 31 {
+			return time.Unix(dateToUnixDays(y, a, b)*86400, 0).UTC(), true
+		}
+		if b >= 1 && b <= 12 && a >= 1 && a <= 31 {
+			return time.Unix(dateToUnixDays(y, b, a)*86400, 0).UTC(), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func parseDateValue(value string) (time.Time, bool) {
@@ -446,26 +571,7 @@ func parseDateValue(value string) (time.Time, bool) {
 	if len(value) != 10 {
 		return time.Time{}, false
 	}
-	if value[4] == '-' && value[7] == '-' {
-		year, month, day := digits4(value[0:4]), digits2(value[5:7]), digits2(value[8:10])
-		if month >= 1 && month <= 12 && day >= 1 && day <= 31 {
-			return makeUTCDate(year, month, day), true
-		}
-	} else if value[4] == '/' && value[7] == '/' {
-		year, month, day := digits4(value[0:4]), digits2(value[5:7]), digits2(value[8:10])
-		if month >= 1 && month <= 12 && day >= 1 && day <= 31 {
-			return makeUTCDate(year, month, day), true
-		}
-	} else if value[2] == '/' && value[5] == '/' {
-		a, b, year := digits2(value[0:2]), digits2(value[3:5]), digits4(value[6:10])
-		if a >= 1 && a <= 12 && b >= 1 && b <= 31 {
-			return makeUTCDate(year, a, b), true
-		}
-		if b >= 1 && b <= 12 && a >= 1 && a <= 31 {
-			return makeUTCDate(year, b, a), true
-		}
-	}
-	return time.Time{}, false
+	return parseDateInline(value)
 }
 
 func parseDate(value string) *time.Time {
@@ -520,7 +626,6 @@ func toUpperByte(c byte) byte {
 	return c
 }
 
-// parseIntManual parses a non-negative integer from s without heap allocation.
 func parseIntManual(s string) (int64, bool) {
 	var n int64
 	for i := 0; i < len(s); i++ {
@@ -533,10 +638,8 @@ func parseIntManual(s string) (int64, bool) {
 	return n, len(s) > 0
 }
 
-func parseSizeValue(value string) (int64, bool) {
-	if len(value) > 0 && (value[0] == ' ' || value[len(value)-1] == ' ') {
-		value = strings.TrimSpace(value)
-	}
+// parseSizeFast parses size values without TrimSpace.
+func parseSizeFast(value string) (int64, bool) {
 	n := len(value)
 	if n == 0 {
 		return 0, false
@@ -544,25 +647,25 @@ func parseSizeValue(value string) (int64, bool) {
 	var mult int64
 	var numStr string
 	if n >= 3 {
-		c1, c2 := toUpperByte(value[n-2]), toUpperByte(value[n-1])
-		if c2 == 'B' {
+		c1, c2 := value[n-2]|0x20, value[n-1]|0x20
+		if c2 == 'b' {
 			switch c1 {
-			case 'K':
+			case 'k':
 				mult, numStr = 1024, value[:n-2]
-			case 'M':
+			case 'm':
 				mult, numStr = 1024*1024, value[:n-2]
-			case 'G':
+			case 'g':
 				mult, numStr = 1024*1024*1024, value[:n-2]
 			}
 		}
 	}
 	if mult == 0 && n >= 2 {
-		switch toUpperByte(value[n-1]) {
-		case 'K':
+		switch value[n-1] | 0x20 {
+		case 'k':
 			mult, numStr = 1024, value[:n-1]
-		case 'M':
+		case 'm':
 			mult, numStr = 1024*1024, value[:n-1]
-		case 'G':
+		case 'g':
 			mult, numStr = 1024*1024*1024, value[:n-1]
 		}
 	}
@@ -582,6 +685,13 @@ func parseSizeValue(value string) (int64, bool) {
 		return num, true
 	}
 	return 0, false
+}
+
+func parseSizeValue(value string) (int64, bool) {
+	if len(value) > 0 && (value[0] == ' ' || value[len(value)-1] == ' ') {
+		value = strings.TrimSpace(value)
+	}
+	return parseSizeFast(value)
 }
 
 func parseSize(value string) *int64 {
