@@ -27,7 +27,8 @@ func NewSQLiteEngine(db *sql.DB) *SQLiteEngine {
 	return &SQLiteEngine{db: db}
 }
 
-// hasFTSTable checks if the messages_fts table exists.
+// hasFTSTable checks if the messages_fts table exists AND is populated.
+// An empty FTS table is treated as unavailable — callers fall back to LIKE search.
 // Result is cached after first successful check. Errors cause retries on next call.
 // Thread-safe via mutex.
 func (e *SQLiteEngine) hasFTSTable(ctx context.Context) bool {
@@ -39,11 +40,12 @@ func (e *SQLiteEngine) hasFTSTable(ctx context.Context) bool {
 		return e.ftsResult
 	}
 
-	var count int
+	// Check table existence
+	var tableCount int
 	err := e.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM sqlite_master
 		WHERE type='table' AND name='messages_fts'
-	`).Scan(&count)
+	`).Scan(&tableCount)
 
 	if err != nil {
 		// On error (canceled context, temporary DB issue), return false
@@ -51,8 +53,27 @@ func (e *SQLiteEngine) hasFTSTable(ctx context.Context) bool {
 		return false
 	}
 
-	// Cache successful result
-	e.ftsResult = count > 0
+	if tableCount == 0 {
+		// Table doesn't exist — cache as unavailable
+		e.ftsResult = false
+		e.ftsChecked = true
+		return false
+	}
+
+	// Table exists — verify FTS5 is functional by running a test MATCH query.
+	// go-sqlcipher may not include the fts5 module, in which case the table
+	// exists but any MATCH query will fail with "no such module: fts5".
+	// Also catches the case where the table is empty (no rows indexed yet).
+	var rowCount int
+	err = e.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'a'`).Scan(&rowCount)
+	if err != nil {
+		// FTS5 module unavailable or other error — fall back to LIKE search.
+		// Don't cache: if the table gets populated later (e.g. build-fts), retry.
+		return false
+	}
+
+	// FTS5 is functional. Cache as available permanently for this process.
+	e.ftsResult = true
 	e.ftsChecked = true
 	return e.ftsResult
 }
