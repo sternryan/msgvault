@@ -249,3 +249,51 @@ client_secrets = "/path/to/client_secret.json"
 [sync]
 rate_limit_qps = 5
 ```
+
+## Current State (as of 2026-03)
+
+**Status:** Active — recent feature addition (web UI)
+**Last Active:** 2026 (web UI commit most recent)
+**Built:**
+- Full Gmail sync pipeline (full + incremental)
+- MIME parsing with charset detection
+- SQLite store (system of record) + FTS5
+- DuckDB/Parquet analytics engine (~3x faster than SQLite JOINs)
+- Bubble Tea TUI with drill-down navigation
+- React/TypeScript web SPA (Dashboard, Messages, Aggregate, Search, Deletions, Thread, Message detail)
+- Deletion staging + Gmail API execution (trash or permanent)
+- UTF-8 encoding repair tool
+- Pre-commit hooks (fmt + lint)
+
+**Not Yet Built:**
+- App-level encryption at rest (database + attachments)
+
+**Known Issues:**
+-  runs  first — requires  (run  once)
+-  skips frontend if you just need the binary fast
+- Binary requires CGO_ENABLED=1 (go-sqlite3 + go-duckdb are C-linked)
+
+
+## Current State (as of 2026-03)
+
+**Status:** Active - recent feature addition (web UI)
+**Last Active:** 2026 (web UI commit most recent)
+**Built:**
+- Full Gmail sync pipeline (full + incremental)
+- MIME parsing with charset detection
+- SQLite store (system of record) + FTS5
+- DuckDB/Parquet analytics engine (~3000x faster than SQLite JOINs)
+- Bubble Tea TUI with drill-down navigation
+- React/TypeScript web SPA (Dashboard, Messages, Aggregate, Search, Deletions, Thread, Message detail)
+- Deletion staging + Gmail API execution (trash or permanent)
+- UTF-8 encoding repair tool
+- Pre-commit hooks (fmt + lint)
+
+**Not Yet Built:**
+- App-level encryption at rest (database + attachments)
+
+**Known Issues:**
+- build target depends on web-build — requires node_modules (run web-install once before first build)
+- build-go skips frontend if you just need the binary fast
+- Binary requires CGO_ENABLED=1 (go-sqlite3 + go-duckdb are C-linked)
+- client_secret_ryanatquartermint.json is committed — do not leak
