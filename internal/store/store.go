@@ -27,6 +27,8 @@ type Store struct {
 	passphrase    string   // Stored for backup operations that need to reopen the DB
 }
 
+const defaultSQLiteParams = "?_journal_mode=WAL&_busy_timeout=30000&_synchronous=NORMAL&_foreign_keys=ON"
+
 // OpenOption configures database opening behavior.
 type OpenOption func(*openConfig)
 
@@ -131,8 +133,13 @@ func (s *Store) tryLock() {
 	s.lockFile = f
 }
 
-// Close closes the database connection and releases the advisory lock.
+// Close checkpoints the WAL, closes the database connection, and releases
+// the advisory lock.
 func (s *Store) Close() error {
+	// Checkpoint WAL before closing to fold it back into the main database.
+	// This prevents WAL accumulation across sessions and reduces the risk of
+	// corruption from stale WAL entries.
+	_ = s.CheckpointWAL()
 	if s.lockFile != nil {
 		syscall.Flock(int(s.lockFile.Fd()), syscall.LOCK_UN)
 		s.lockFile.Close()
@@ -140,6 +147,26 @@ func (s *Store) Close() error {
 		s.lockFile = nil
 	}
 	return s.db.Close()
+}
+
+// CheckpointWAL forces a WAL checkpoint, folding the WAL back into the main
+// database file. Uses TRUNCATE mode which also resets the WAL file to zero
+// bytes. Returns nil on success; callers may log but should not fail on error.
+func (s *Store) CheckpointWAL() error {
+	var busy, log, checkpointed int
+	err := s.db.QueryRow(
+		"PRAGMA wal_checkpoint(TRUNCATE)",
+	).Scan(&busy, &log, &checkpointed)
+	if err != nil {
+		return err
+	}
+	if busy != 0 {
+		return fmt.Errorf(
+			"WAL checkpoint incomplete: database busy "+
+				"(log=%d, checkpointed=%d)", log, checkpointed,
+		)
+	}
+	return nil
 }
 
 // DB returns the underlying database connection for advanced queries.
@@ -329,6 +356,24 @@ func (s *Store) InitSchema() error {
 	// Migrate existing databases to add content_id column if missing
 	if err := s.migrateAddContentID(); err != nil {
 		return fmt.Errorf("migrate content_id: %w", err)
+	}
+
+	// Migrations: add columns for databases created before these features.
+	// SQLite returns "duplicate column name" if the column already exists,
+	// which we treat as success.
+	for _, m := range []struct {
+		sql  string
+		desc string
+	}{
+		{`ALTER TABLE sources ADD COLUMN sync_config JSON`, "sync_config"},
+		{`ALTER TABLE messages ADD COLUMN rfc822_message_id TEXT`, "rfc822_message_id"},
+		{`ALTER TABLE sources ADD COLUMN oauth_app TEXT`, "oauth_app"},
+	} {
+		if _, err := s.db.Exec(m.sql); err != nil {
+			if !isSQLiteError(err, "duplicate column name") {
+				return fmt.Errorf("migrate schema (%s): %w", m.desc, err)
+			}
+		}
 	}
 
 	// Try to load and execute SQLite-specific schema (FTS5)

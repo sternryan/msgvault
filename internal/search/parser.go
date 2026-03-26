@@ -25,6 +25,8 @@ type Query struct {
 }
 
 func (q *Query) IsEmpty() bool {
+	// AccountID is intentionally excluded: it's injected by the UI,
+	// not the query string, so it doesn't count as a query filter.
 	return len(q.TextTerms) == 0 &&
 		len(q.FromAddrs) == 0 &&
 		len(q.ToAddrs) == 0 &&

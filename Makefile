@@ -47,7 +47,7 @@ install:
 
 # Clean build artifacts
 clean:
-	rm -f msgvault mimeshootout
+	rm -f msgvault msgvault.exe mimeshootout
 	rm -rf bin/
 
 # Run tests

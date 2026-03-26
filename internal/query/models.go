@@ -21,33 +21,33 @@ type AggregateRow struct {
 // Contains enough information for display without fetching the full body.
 type MessageSummary struct {
 	ID                   int64      `json:"id"`
-	SourceMessageID      string     `json:"sourceMessageId"`
-	ConversationID       int64      `json:"conversationId"`
-	SourceConversationID string     `json:"sourceConversationId"` // Gmail Thread ID
+	SourceMessageID      string     `json:"source_message_id"`
+	ConversationID       int64      `json:"conversation_id"`
+	SourceConversationID string     `json:"source_conversation_id"` // Gmail Thread ID
 	Subject              string     `json:"subject"`
 	Snippet              string     `json:"snippet"`
-	FromEmail            string     `json:"fromEmail"`
-	FromName             string     `json:"fromName"`
-	SentAt               time.Time  `json:"sentAt"`
-	SizeEstimate         int64      `json:"sizeEstimate"`
-	HasAttachments       bool       `json:"hasAttachments"`
-	AttachmentCount      int        `json:"attachmentCount"`
+	FromEmail            string     `json:"from_email"`
+	FromName             string     `json:"from_name"`
+	SentAt               time.Time  `json:"sent_at"`
+	SizeEstimate         int64      `json:"size_estimate"`
+	HasAttachments       bool       `json:"has_attachments"`
+	AttachmentCount      int        `json:"attachment_count"`
 	Labels               []string   `json:"labels"`
-	DeletedAt            *time.Time `json:"deletedAt,omitempty"` // When message was deleted from server (nil if not deleted)
+	DeletedAt            *time.Time `json:"deleted_at,omitempty"` // When message was deleted from server (nil if not deleted)
 }
 
 // MessageDetail represents a full message with body and attachments.
 type MessageDetail struct {
 	ID                   int64      `json:"id"`
-	SourceMessageID      string     `json:"sourceMessageId"`
-	ConversationID       int64      `json:"conversationId"`
-	SourceConversationID string     `json:"sourceConversationId"` // Gmail Thread ID
+	SourceMessageID      string     `json:"source_message_id"`
+	ConversationID       int64      `json:"conversation_id"`
+	SourceConversationID string     `json:"source_conversation_id"` // Gmail Thread ID
 	Subject              string     `json:"subject"`
 	Snippet              string     `json:"snippet"`
-	SentAt               time.Time  `json:"sentAt"`
-	ReceivedAt           *time.Time `json:"receivedAt,omitempty"`
-	SizeEstimate         int64      `json:"sizeEstimate"`
-	HasAttachments       bool       `json:"hasAttachments"`
+	SentAt               time.Time  `json:"sent_at"`
+	ReceivedAt           *time.Time `json:"received_at,omitempty"`
+	SizeEstimate         int64      `json:"size_estimate"`
+	HasAttachments       bool       `json:"has_attachments"`
 
 	// Participants
 	From []Address `json:"from"`
@@ -56,8 +56,8 @@ type MessageDetail struct {
 	Bcc  []Address `json:"bcc"`
 
 	// Content
-	BodyText string `json:"bodyText"`
-	BodyHTML string `json:"bodyHtml"`
+	BodyText string `json:"body_text"`
+	BodyHTML string `json:"body_html"`
 
 	// Metadata
 	Labels      []string         `json:"labels"`

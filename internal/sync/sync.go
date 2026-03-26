@@ -24,6 +24,10 @@ var ErrHistoryExpired = errors.New("history expired - run full sync")
 
 // Options configures sync behavior.
 type Options struct {
+	// SourceType is the type of source being synced ("gmail" or "imap").
+	// Defaults to "gmail" if empty.
+	SourceType string
+
 	// Query is an optional Gmail search query (e.g., "before:2020/01/01")
 	Query string
 
@@ -38,10 +42,6 @@ type Options struct {
 
 	// AttachmentsDir is where to store attachments
 	AttachmentsDir string
-
-	// SourceType is the source type for the database record (default: "gmail").
-	// Use "apple_messages" for iMessage sync.
-	SourceType string
 
 	// Limit caps the number of messages scanned per sync (0 = unlimited).
 	// Enforced by truncating the message ID list before downloading content.
@@ -195,6 +195,13 @@ func (s *Syncer) processBatch(ctx context.Context, sourceID int64, listResp *gma
 				checkpoint.ErrorsCount++
 				continue
 			}
+			// Non-nil stub with nil Raw signals a cross-mailbox
+			// dedup skip (e.g. same message in All Mail and Trash).
+			// Distinct from []byte{} which is a genuine empty body.
+			if raw.Raw == nil {
+				result.skipped++
+				continue
+			}
 
 			// Track oldest message date for progress display
 			// Gmail returns messages newest-to-oldest, so oldest shows where we've reached
@@ -207,6 +214,10 @@ func (s *Syncer) processBatch(ctx context.Context, sourceID int64, listResp *gma
 
 			threadID := threadIDs[newIDs[i]]
 			if err := s.ingestMessage(ctx, sourceID, raw, threadID, labelMap); err != nil {
+				if errors.Is(err, errDuplicateRFC822) {
+					result.skipped++
+					continue
+				}
 				s.logger.Warn("failed to ingest message", "id", raw.ID, "error", err)
 				checkpoint.ErrorsCount++
 				continue
@@ -226,7 +237,11 @@ func (s *Syncer) Full(ctx context.Context, email string) (summary *gmail.SyncSum
 	summary = &gmail.SyncSummary{StartTime: startTime}
 
 	// Get or create source
-	source, err := s.store.GetOrCreateSource(s.opts.SourceType, email)
+	sourceType := s.opts.SourceType
+	if sourceType == "" {
+		sourceType = "gmail"
+	}
+	source, err := s.store.GetOrCreateSource(sourceType, email)
 	if err != nil {
 		return nil, fmt.Errorf("get/create source: %w", err)
 	}
@@ -358,6 +373,13 @@ func (s *Syncer) Full(ctx context.Context, email string) (summary *gmail.SyncSum
 		s.logger.Warn("failed to complete sync", "error", err)
 	}
 
+	// Checkpoint WAL after sync to fold it back into the main database.
+	// This prevents WAL accumulation across long sync sessions and ensures
+	// readers (e.g. build-cache) see a consistent database state.
+	if err := s.store.CheckpointWAL(); err != nil {
+		s.logger.Warn("wal checkpoint after sync failed", "error", err)
+	}
+
 	// Build summary
 	summary.EndTime = time.Now()
 	summary.Duration = summary.EndTime.Sub(summary.StartTime)
@@ -423,6 +445,7 @@ func (s *Syncer) parseToModel(sourceID int64, raw *gmail.RawMessage, threadID st
 	}
 
 	// Parse MIME - on failure, store with placeholder body
+	// (threading override for IMAP happens after parsing below)
 	parsed, parseErr := mime.Parse(raw.Raw)
 	if parseErr != nil {
 		// Extract just the first line of error (enmime includes full stack traces)
@@ -441,6 +464,16 @@ func (s *Syncer) parseToModel(sourceID int64, raw *gmail.RawMessage, threadID st
 		s.logger.Warn("MIME parse failed, storing with placeholder",
 			"id", raw.ID,
 			"error", errMsg)
+	}
+
+	// For IMAP sources, the API provides no real thread info —
+	// ThreadID is just the composite message ID. Derive a thread
+	// key from MIME threading headers to group related messages
+	// into conversations.
+	if s.opts.SourceType == "imap" {
+		if derived := deriveThreadKey(parsed); derived != "" {
+			threadID = derived
+		}
 	}
 
 	// Ensure all text fields are valid UTF-8
@@ -491,10 +524,17 @@ func (s *Syncer) parseToModel(sourceID int64, raw *gmail.RawMessage, threadID st
 	}
 
 	// Build message record
+	rfc822ID := sql.NullString{}
+	if parsed.MessageID != "" {
+		rfc822ID = sql.NullString{
+			String: parsed.MessageID, Valid: true,
+		}
+	}
 	msg := &store.Message{
 		ConversationID:  conversationID,
 		SourceID:        sourceID,
 		SourceMessageID: raw.ID,
+		RFC822MessageID: rfc822ID,
 		MessageType:     "email",
 		SenderID:        senderID,
 		Subject:         sql.NullString{String: subject, Valid: subject != ""},
@@ -614,11 +654,49 @@ func (s *Syncer) persistMessage(data *messageData, labelMap map[string]int64) er
 	return nil
 }
 
+// errDuplicateRFC822 signals that a message was skipped because
+// another message with the same RFC822 Message-ID already exists
+// for this source. Used for cross-sync dedup on IMAP where
+// composite IDs change when messages move between mailboxes.
+var errDuplicateRFC822 = errors.New("duplicate RFC822 Message-ID")
+
 // ingestMessage parses and stores a single message.
 func (s *Syncer) ingestMessage(ctx context.Context, sourceID int64, raw *gmail.RawMessage, threadID string, labelMap map[string]int64) error {
 	data, err := s.parseToModel(sourceID, raw, threadID)
 	if err != nil {
 		return err
+	}
+
+	// For IMAP sources, check if a message with the same RFC822
+	// Message-ID already exists under a different composite ID.
+	// This handles messages that moved between mailboxes across
+	// syncs (e.g. All Mail → Trash changes the mailbox|uid key).
+	// When matched, update the existing row's composite ID and
+	// labels so future syncs skip it at the ID-filtering stage
+	// instead of re-downloading the MIME body each time.
+	if s.opts.SourceType == "imap" &&
+		data.message.RFC822MessageID.Valid {
+		existingID, err := s.store.GetMessageIDByRFC822ID(
+			sourceID, data.message.RFC822MessageID.String)
+		if err != nil {
+			return fmt.Errorf("check rfc822 dedup: %w", err)
+		}
+		if existingID > 0 {
+			var labelIDs []int64
+			for _, lbl := range data.gmailLabelIDs {
+				if id, ok := labelMap[lbl]; ok {
+					labelIDs = append(labelIDs, id)
+				}
+			}
+			if err := s.store.UpdateMessageOnDedup(
+				existingID,
+				data.message.SourceMessageID,
+				labelIDs,
+			); err != nil {
+				return fmt.Errorf("update dedup message: %w", err)
+			}
+			return errDuplicateRFC822
+		}
 	}
 
 	return s.persistMessage(data, labelMap)
@@ -688,6 +766,58 @@ func joinEmails(addrs []mime.Address) string {
 		}
 	}
 	return strings.Join(emails, " ")
+}
+
+// deriveThreadKey extracts a thread identifier from parsed MIME
+// headers. Returns the thread root Message-ID from References
+// (first entry per RFC 2822), falls back to InReplyTo for simple
+// replies, then to the message's own Message-ID. Returns "" when
+// no threading info is available.
+//
+// InReplyTo is parsed as a msg-id list per RFC 2822 (it may
+// contain multiple IDs and comments); only the first valid ID
+// is used. Angle brackets are stripped for consistency with
+// parseReferences.
+func deriveThreadKey(parsed *mime.Message) string {
+	if len(parsed.References) > 0 {
+		return parsed.References[0]
+	}
+	if parsed.InReplyTo != "" {
+		if ids := parseMsgIDList(parsed.InReplyTo); len(ids) > 0 {
+			return ids[0]
+		}
+	}
+	if parsed.MessageID != "" {
+		if ids := parseMsgIDList(parsed.MessageID); len(ids) > 0 {
+			return ids[0]
+		}
+	}
+	return ""
+}
+
+// parseMsgIDList extracts angle-bracketed message-IDs from a
+// header value (In-Reply-To, Message-ID, References). Only
+// content inside < > pairs is returned, with brackets stripped.
+// Comments, CFWS, and bare tokens are ignored per RFC 2822
+// msg-id syntax.
+func parseMsgIDList(s string) []string {
+	var result []string
+	for {
+		open := strings.IndexByte(s, '<')
+		if open < 0 {
+			break
+		}
+		close := strings.IndexByte(s[open+1:], '>')
+		if close < 0 {
+			break
+		}
+		id := s[open+1 : open+1+close]
+		if id != "" {
+			result = append(result, id)
+		}
+		s = s[open+1+close+1:]
+	}
+	return result
 }
 
 // extractSubjectFromSnippet attempts to extract a subject from the message snippet.

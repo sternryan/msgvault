@@ -13,8 +13,8 @@ func (s *Store) GetSourcesByIdentifier(
 ) ([]*Source, error) {
 	rows, err := s.db.Query(`
 		SELECT id, source_type, identifier, display_name,
-		       google_user_id, last_sync_at, sync_cursor,
-		       created_at, updated_at
+		       google_user_id, last_sync_at, sync_cursor, sync_config,
+		       oauth_app, created_at, updated_at
 		FROM sources
 		WHERE identifier = ?
 		ORDER BY source_type

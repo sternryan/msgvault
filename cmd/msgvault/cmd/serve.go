@@ -2,15 +2,21 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wesm/msgvault/internal/api"
 	"github.com/wesm/msgvault/internal/gmail"
 	"github.com/wesm/msgvault/internal/oauth"
+	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/scheduler"
 	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/sync"
@@ -48,7 +54,7 @@ func init() {
 
 func runServe(cmd *cobra.Command, args []string) error {
 	// Validate config
-	if cfg.OAuth.ClientSecrets == "" {
+	if !cfg.OAuth.HasAnyConfig() {
 		return errOAuthNotConfigured()
 	}
 
@@ -71,15 +77,39 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("init schema: %w", err)
 	}
 
-	// Create OAuth manager
-	oauthMgr, err := oauth.NewManager(cfg.OAuth.ClientSecrets, cfg.TokensDir(), logger)
-	if err != nil {
-		return wrapOAuthError(fmt.Errorf("create oauth manager: %w", err))
+	// Create query engine for TUI aggregate support.
+	// Prefer DuckDB over Parquet when the cache is complete and fresh;
+	// otherwise fall back to SQLite so remote endpoints still work.
+	analyticsDir := cfg.AnalyticsDir()
+	var engine query.Engine
+	staleness := cacheNeedsBuild(dbPath, analyticsDir)
+	if !staleness.NeedsBuild && query.HasCompleteParquetData(analyticsDir) {
+		duckEngine, engineErr := query.NewDuckDBEngine(
+			analyticsDir, dbPath, s.DB(),
+		)
+		if engineErr != nil {
+			logger.Warn("DuckDB engine failed, falling back to SQLite",
+				"error", engineErr)
+			engine = query.NewSQLiteEngine(s.DB())
+		} else {
+			engine = duckEngine
+		}
+	} else {
+		if staleness.Reason != "" {
+			logger.Info("parquet cache not usable, using SQLite engine",
+				"reason", staleness.Reason)
+		} else {
+			logger.Info("parquet cache not built - using SQLite engine (run 'msgvault build-cache' for faster aggregates)")
+		}
+		engine = query.NewSQLiteEngine(s.DB())
 	}
+	defer engine.Close()
+
+	getOAuthMgr := oauthManagerCache()
 
 	// Create sync function for the scheduler
 	syncFunc := func(ctx context.Context, email string) error {
-		return runScheduledSync(ctx, email, s, oauthMgr)
+		return runScheduledSync(ctx, email, s, getOAuthMgr)
 	}
 
 	// Create and configure scheduler
@@ -106,7 +136,33 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Start the scheduler
 	sched.Start()
 
+	// Create adapters for the API interfaces
+	storeAdapter := &storeAPIAdapter{store: s}
+	schedAdapter := &schedulerAdapter{scheduler: sched}
+
+	// Create and start API server
+	apiServer := api.NewServerWithOptions(api.ServerOptions{
+		Config:    cfg,
+		Store:     storeAdapter,
+		Engine:    engine,
+		Scheduler: schedAdapter,
+		Logger:    logger,
+	})
+
+	// Start API server in goroutine
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := apiServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+		}
+	}()
+
+	bindAddr := cfg.Server.BindAddr
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1"
+	}
 	fmt.Printf("msgvault daemon started\n")
+	fmt.Printf("  API server: http://%s\n", net.JoinHostPort(bindAddr, strconv.Itoa(cfg.Server.APIPort)))
 	fmt.Printf("  Scheduled accounts: %d\n", count)
 	fmt.Printf("  Data directory: %s\n", cfg.Data.DataDir)
 	fmt.Println()
@@ -117,20 +173,28 @@ func runServe(cmd *cobra.Command, args []string) error {
 	for _, status := range sched.Status() {
 		fmt.Printf("  %s: next sync at %s\n", status.Email, status.NextRun.Local().Format("2006-01-02 15:04:05"))
 	}
-	if count > 0 {
-		fmt.Println()
-	}
+	fmt.Println()
 
-	// Wait for shutdown signal
+	// Wait for shutdown signal or server error
 	select {
 	case sig := <-sigChan:
 		logger.Info("received shutdown signal", "signal", sig)
 		fmt.Printf("\nReceived %s, shutting down...\n", sig)
+	case err := <-serverErr:
+		logger.Error("API server error", "error", err)
+		fmt.Printf("\nAPI server error: %v\n", err)
 	case <-ctx.Done():
 		logger.Info("context cancelled")
 	}
 
 	// Graceful shutdown
+	fmt.Println("Shutting down API server...")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := apiServer.Shutdown(shutdownCtx); err != nil {
+		logger.Error("API server shutdown error", "error", err)
+	}
+
 	fmt.Println("Waiting for running syncs to complete...")
 	schedCtx := sched.Stop()
 
@@ -145,10 +209,76 @@ func runServe(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// storeAPIAdapter adapts store.Store to api.MessageStore.
+// Since api.APIMessage, api.StoreStats, etc. are type aliases for store types,
+// the adapter methods are simple pass-throughs with no conversion needed.
+type storeAPIAdapter struct {
+	store *store.Store
+}
+
+func (a *storeAPIAdapter) GetStats() (*api.StoreStats, error) {
+	return a.store.GetStats()
+}
+
+func (a *storeAPIAdapter) ListMessages(offset, limit int) ([]api.APIMessage, int64, error) {
+	return a.store.ListMessages(offset, limit)
+}
+
+func (a *storeAPIAdapter) GetMessage(id int64) (*api.APIMessage, error) {
+	return a.store.GetMessage(id)
+}
+
+func (a *storeAPIAdapter) SearchMessages(query string, offset, limit int) ([]api.APIMessage, int64, error) {
+	return a.store.SearchMessages(query, offset, limit)
+}
+
+// schedulerAdapter adapts scheduler.Scheduler to api.SyncScheduler.
+// Since api.AccountStatus is a type alias for scheduler.AccountStatus,
+// the adapter methods are simple pass-throughs.
+type schedulerAdapter struct {
+	scheduler *scheduler.Scheduler
+}
+
+func (a *schedulerAdapter) IsScheduled(email string) bool {
+	return a.scheduler.IsScheduled(email)
+}
+
+func (a *schedulerAdapter) TriggerSync(email string) error {
+	return a.scheduler.TriggerSync(email)
+}
+
+func (a *schedulerAdapter) AddAccount(email, schedule string) error {
+	return a.scheduler.AddAccount(email, schedule)
+}
+
+func (a *schedulerAdapter) IsRunning() bool {
+	return a.scheduler.IsRunning()
+}
+
+func (a *schedulerAdapter) Status() []api.AccountStatus {
+	return a.scheduler.Status()
+}
+
 // runScheduledSync performs an incremental sync for a scheduled account.
-func runScheduledSync(ctx context.Context, email string, s *store.Store, oauthMgr *oauth.Manager) error {
+func runScheduledSync(ctx context.Context, email string, s *store.Store, getOAuthMgr func(string) (*oauth.Manager, error)) error {
 	logger.Info("starting scheduled sync", "email", email)
 	startTime := time.Now()
+
+	// Look up source to get OAuth app binding. Fall back to default
+	// if no source row exists (token-first workflow).
+	appName := ""
+	src, srcErr := findGmailSource(s, email)
+	if srcErr != nil {
+		return fmt.Errorf("look up source for %s: %w", email, srcErr)
+	}
+	if src != nil {
+		appName = sourceOAuthApp(src)
+	}
+
+	oauthMgr, err := getOAuthMgr(appName)
+	if err != nil {
+		return fmt.Errorf("resolve OAuth credentials for %s: %w", email, err)
+	}
 
 	// Get token source — intentionally not using getTokenSourceWithReauth here
 	// because serve runs as a daemon and cannot open a browser for OAuth.
@@ -175,8 +305,14 @@ func runScheduledSync(ctx context.Context, email string, s *store.Store, oauthMg
 	// Create syncer (no CLI progress for daemon mode)
 	syncer := sync.New(client, s, opts).WithLogger(logger)
 
+	// Resolve source — scheduled sync is Gmail-only.
+	source, err := s.GetOrCreateSource("gmail", email)
+	if err != nil {
+		return fmt.Errorf("get source: %w", err)
+	}
+
 	// Run incremental sync
-	summary, err := syncer.Incremental(ctx, email)
+	summary, err := syncer.Incremental(ctx, source)
 	if err != nil {
 		return fmt.Errorf("incremental sync failed: %w", err)
 	}
@@ -187,10 +323,15 @@ func runScheduledSync(ctx context.Context, email string, s *store.Store, oauthMg
 		"duration", time.Since(startTime),
 	)
 
-	// Build cache after sync if there were new messages
-	if summary.MessagesAdded > 0 {
-		logger.Info("building cache after sync", "email", email)
-		result, err := buildCache(cfg.DatabaseDSN(), cfg.AnalyticsDir(), false)
+	// Rebuild cache if stale (covers new messages and deletions).
+	dbPath := cfg.DatabaseDSN()
+	analyticsDir := cfg.AnalyticsDir()
+	if staleness := cacheNeedsBuild(dbPath, analyticsDir); staleness.NeedsBuild {
+		logger.Info("rebuilding cache after sync",
+			"email", email, "reason", staleness.Reason,
+			"full_rebuild", staleness.FullRebuild)
+		result, err := buildCache(
+			dbPath, analyticsDir, staleness.FullRebuild)
 		if err != nil {
 			logger.Error("cache build failed", "error", err)
 			// Don't fail the sync for cache build errors
