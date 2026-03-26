@@ -84,10 +84,10 @@ func TestParse_SubjectWithQuotedOperator(t *testing.T) {
 // decimal values — ParseFloat accepts them, yielding a negative byte count.
 func TestParse_NegativeDecimalSize(t *testing.T) {
 	tests := []struct {
-		name     string
-		query    string
+		name       string
+		query      string
 		wantLarger bool
-		wantVal  int64
+		wantVal    int64
 	}{
 		{
 			name:       "larger:-1M produces negative LargerThan",

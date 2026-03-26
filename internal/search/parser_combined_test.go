@@ -30,7 +30,7 @@ func TestParse_EmptyOperatorValue(t *testing.T) {
 			want:  Query{SubjectTerms: []string{""}},
 		},
 		{
-			name:  "empty label value adds empty string",
+			name:  "empty label value is ignored",
 			query: "label:",
 			want:  Query{},
 		},

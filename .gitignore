@@ -44,3 +44,5 @@ __pycache__/
 .claude/
 web/node_modules/
 internal/web/dist/
+.superpowers/
+.gstack/

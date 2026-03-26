@@ -85,7 +85,7 @@ func TestPathTraversalInContentHash(t *testing.T) {
 		{Filename: "stolen.txt", ContentHash: maliciousHash},
 	}
 
-	stats := Attachments(zipPath, attachDir, inputs)
+	stats := Attachments(zipPath, attachDir, "", inputs)
 
 	// The export should fail - path traversal should be detected and rejected
 	if stats.Count > 0 {
