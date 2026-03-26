@@ -342,4 +342,15 @@ func TestQuery_IsEmpty(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("AccountID only", func(t *testing.T) {
+		q := &Query{}
+		id := int64(42)
+		q.AccountID = &id
+		// AccountID is injected by the UI, not the query string,
+		// so it doesn't count as a query filter for IsEmpty.
+		if !q.IsEmpty() {
+			t.Error("IsEmpty() = false for query with only AccountID set (should be true)")
+		}
+	})
 }

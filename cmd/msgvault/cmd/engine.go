@@ -23,10 +23,10 @@ func initQueryEngine(dbPath, analyticsDir string, forceSQL, skipCacheBuild bool)
 
 	// Check if cache needs to be built/updated
 	if !forceSQL && !skipCacheBuild {
-		needsBuild, reason := cacheNeedsBuild(dbPath, analyticsDir)
-		if needsBuild {
-			fmt.Printf("Building analytics cache (%s)...\n", reason)
-			result, err := buildCache(dbPath, analyticsDir, true)
+		staleness := cacheNeedsBuild(dbPath, analyticsDir)
+		if staleness.NeedsBuild {
+			fmt.Printf("Building analytics cache (%s)...\n", staleness.Reason)
+			result, err := buildCache(dbPath, analyticsDir, staleness.FullRebuild)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: Failed to build cache: %v\n", err)
 				fmt.Fprintf(os.Stderr, "Falling back to SQLite (may be slow for large archives)\n")

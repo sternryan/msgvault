@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
 	"github.com/wesm/msgvault/internal/config"
+	"github.com/wesm/msgvault/internal/oauth"
 	"github.com/wesm/msgvault/internal/store"
 	"golang.org/x/oauth2"
 )
@@ -103,13 +105,18 @@ func oauthSetupHint() string {
 	if cfg != nil {
 		configPath = cfg.ConfigFilePath()
 	}
-	return fmt.Sprintf(`
+	hint := fmt.Sprintf(`
 To use msgvault, you need a Google Cloud OAuth credential:
   1. Follow the setup guide: https://msgvault.io/guides/oauth-setup/
   2. Download the client_secret.json file
   3. Create or edit %s:
        [oauth]
        client_secrets = "/path/to/client_secret.json"`, configPath)
+	if cfg != nil && len(cfg.OAuth.Apps) > 0 {
+		hint += "\n\nNamed OAuth apps are configured. " +
+			"Use 'add-account <email> --oauth-app <name>' to bind an account."
+	}
+	return hint
 }
 
 // errOAuthNotConfigured returns a helpful error when OAuth client secrets are missing.
@@ -192,8 +199,8 @@ func isAuthInvalidError(err error) bool {
 type tokenReauthorizer interface {
 	TokenSource(ctx context.Context, email string) (oauth2.TokenSource, error)
 	HasToken(email string) bool
-	DeleteToken(email string) error
 	Authorize(ctx context.Context, email string) error
+	AuthorizeManual(ctx context.Context, email string) error
 }
 
 // getTokenSourceWithReauth tries to get a token source for the given email.
@@ -236,11 +243,23 @@ func getTokenSourceWithReauth(
 
 	fmt.Printf("Token for %s is expired or revoked. Re-authorizing...\n", email)
 
-	if delErr := mgr.DeleteToken(email); delErr != nil {
-		return nil, fmt.Errorf("delete expired token: %w", delErr)
-	}
-
-	if authErr := mgr.Authorize(ctx, email); authErr != nil {
+	// Use manual flow (no browser auto-launch) so the user sees which
+	// account needs authorization and can select the correct one.
+	// AuthorizeManual validates the token and atomically saves it,
+	// so the old token is only overwritten after validation succeeds.
+	if authErr := mgr.AuthorizeManual(ctx, email); authErr != nil {
+		var mismatch *oauth.TokenMismatchError
+		if errors.As(authErr, &mismatch) {
+			return nil, fmt.Errorf(
+				"re-authorize %s: %w\n"+
+					"If this account uses an alias, remove "+
+					"and re-add with the primary address:\n"+
+					"  msgvault remove-account %s --type gmail\n"+
+					"  msgvault add-account %s",
+				email, authErr,
+				mismatch.Expected, mismatch.Actual,
+			)
+		}
 		return nil, fmt.Errorf("re-authorize %s: %w", email, authErr)
 	}
 
@@ -251,6 +270,40 @@ func getTokenSourceWithReauth(
 	}
 
 	return tokenSource, nil
+}
+
+// oauthManagerCache returns a resolver function that lazily creates and
+// caches oauth.Manager instances keyed by app name. The cache is safe
+// for concurrent use (serve runs scheduled syncs in goroutines).
+func oauthManagerCache() func(appName string) (*oauth.Manager, error) {
+	var mu sync.Mutex
+	managers := map[string]*oauth.Manager{}
+	return func(appName string) (*oauth.Manager, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if mgr, ok := managers[appName]; ok {
+			return mgr, nil
+		}
+		secretsPath, err := cfg.OAuth.ClientSecretsFor(appName)
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := oauth.NewManager(secretsPath, cfg.TokensDir(), logger)
+		if err != nil {
+			return nil, wrapOAuthError(fmt.Errorf("create oauth manager: %w", err))
+		}
+		managers[appName] = mgr
+		return mgr, nil
+	}
+}
+
+// sourceOAuthApp extracts the oauth app name from a Source, returning ""
+// for the default app.
+func sourceOAuthApp(src *store.Source) string {
+	if src != nil && src.OAuthApp.Valid {
+		return src.OAuthApp.String
+	}
+	return ""
 }
 
 func init() {

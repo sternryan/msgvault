@@ -27,9 +27,9 @@
           in
           (pkgs.buildGoModule.override { go = go_pinned; }) {
             pname = "msgvault";
-            version = "0.0.0-dev";
+            version = "0.11.0";
             src = ./.;
-            vendorHash = "sha256-/M0yrxlz9zooEGzdsaITpAty0uiK5uYiqZFOa/1ZaEw=";
+            vendorHash = "sha256-o7yjPy1pDkD6Ia1H/4Ny/GYqfwv4Vbsd86bQJY6IiVo=";
             proxyVendor = true;
             subPackages = [ "cmd/msgvault" ];
             tags = [ "fts5" ];
