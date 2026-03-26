@@ -216,8 +216,8 @@ func TestParse_AddressFieldsPreserveInputOrder(t *testing.T) {
 // TestParse_DateResultsAreUTC verifies that all parsed dates have the UTC location.
 func TestParse_DateResultsAreUTC(t *testing.T) {
 	tests := []struct {
-		name  string
-		query string
+		name    string
+		query   string
 		getDate func(q *Query) *time.Time
 	}{
 		{"after date", "after:2024-06-15", func(q *Query) *time.Time { return q.AfterDate }},

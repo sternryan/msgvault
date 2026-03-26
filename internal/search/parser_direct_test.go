@@ -10,9 +10,9 @@ import (
 // higher-level Parse() tests.
 func TestParseSize_Direct(t *testing.T) {
 	tests := []struct {
-		input    string
-		wantNil  bool
-		wantVal  int64
+		input   string
+		wantNil bool
+		wantVal int64
 	}{
 		// Plain bytes — the ParseInt path
 		{"0", false, 0},
@@ -56,7 +56,7 @@ func TestParseSize_Direct(t *testing.T) {
 		// Invalid inputs
 		{"", true, 0},
 		{"abc", true, 0},
-		{"M", true, 0},   // suffix only, no number
+		{"M", true, 0}, // suffix only, no number
 		{"K", true, 0},
 		{"-1", false, -1}, // ParseInt accepts negatives
 		{"xyzM", true, 0}, // letters before suffix
@@ -151,10 +151,10 @@ func TestParseRelativeDate_Direct(t *testing.T) {
 		{"5y", false, 2020, time.March, 20},
 		// Invalid patterns
 		{"", true, 0, 0, 0},
-		{"7", true, 0, 0, 0},   // missing unit
+		{"7", true, 0, 0, 0}, // missing unit
 		{"abc", true, 0, 0, 0},
-		{"1z", true, 0, 0, 0},  // invalid unit letter
-		{"d", true, 0, 0, 0},   // missing amount
+		{"1z", true, 0, 0, 0}, // invalid unit letter
+		{"d", true, 0, 0, 0},  // missing amount
 	}
 
 	for _, tt := range tests {

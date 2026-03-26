@@ -57,7 +57,7 @@ func TestSanitizeExportTokenPath(t *testing.T) {
 	}
 }
 
-func TestEmailValidation(t *testing.T) {
+func TestExportEmailValidation(t *testing.T) {
 	tests := []struct {
 		name    string
 		email   string

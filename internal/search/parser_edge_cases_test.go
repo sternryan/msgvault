@@ -152,12 +152,12 @@ func TestParseSize_EdgeCases(t *testing.T) {
 // TestParseDate_EdgeCases covers alternate date formats and invalid dates.
 func TestParseDate_EdgeCases(t *testing.T) {
 	tests := []struct {
-		name       string
-		query      string
+		name        string
+		query       string
 		wantNilDate bool
-		wantYear   int
-		wantMonth  time.Month
-		wantDay    int
+		wantYear    int
+		wantMonth   time.Month
+		wantDay     int
 	}{
 		{
 			name:      "YYYY/MM/DD format",
@@ -244,28 +244,28 @@ func TestParseRelativeDate_Invalid(t *testing.T) {
 // plural "attachments", and unknown has: values.
 func TestParse_HasVariants(t *testing.T) {
 	tests := []struct {
-		name          string
-		query         string
+		name           string
+		query          string
 		wantAttachment *bool
 	}{
 		{
-			name:          "has:attachments (plural)",
-			query:         "has:attachments",
+			name:           "has:attachments (plural)",
+			query:          "has:attachments",
 			wantAttachment: ptr.Bool(true),
 		},
 		{
-			name:          "has:ATTACHMENT (uppercase)",
-			query:         "has:ATTACHMENT",
+			name:           "has:ATTACHMENT (uppercase)",
+			query:          "has:ATTACHMENT",
 			wantAttachment: ptr.Bool(true),
 		},
 		{
-			name:          "has:unknown does not set attachment",
-			query:         "has:unknown",
+			name:           "has:unknown does not set attachment",
+			query:          "has:unknown",
 			wantAttachment: nil,
 		},
 		{
-			name:          "has:label does not set attachment",
-			query:         "has:label",
+			name:           "has:label does not set attachment",
+			query:          "has:label",
 			wantAttachment: nil,
 		},
 	}

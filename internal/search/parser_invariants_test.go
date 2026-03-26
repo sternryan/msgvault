@@ -174,15 +174,15 @@ func TestParse_OperatorValuesNotInTextTerms(t *testing.T) {
 // operators are case-insensitive, and the address value is lowercased.
 func TestParse_CcBccCaseInsensitiveOperator(t *testing.T) {
 	tests := []struct {
-		name     string
-		query    string
-		wantCc   []string
-		wantBcc  []string
+		name    string
+		query   string
+		wantCc  []string
+		wantBcc []string
 	}{
 		{
-			name:    "CC uppercase",
-			query:   "CC:alice@example.com",
-			wantCc:  []string{"alice@example.com"},
+			name:   "CC uppercase",
+			query:  "CC:alice@example.com",
+			wantCc: []string{"alice@example.com"},
 		},
 		{
 			name:    "BCC uppercase",
@@ -190,9 +190,9 @@ func TestParse_CcBccCaseInsensitiveOperator(t *testing.T) {
 			wantBcc: []string{"bob@example.com"},
 		},
 		{
-			name:    "Cc mixed case",
-			query:   "Cc:carol@example.com",
-			wantCc:  []string{"carol@example.com"},
+			name:   "Cc mixed case",
+			query:  "Cc:carol@example.com",
+			wantCc: []string{"carol@example.com"},
 		},
 	}
 	for _, tt := range tests {

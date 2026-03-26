@@ -89,13 +89,13 @@ func TestIsQuotedPhrase(t *testing.T) {
 		want  bool
 	}{
 		{`"hello world"`, true},
-		{`"ab"`, true},            // len=4, 4>2=true
-		{`"x"`, true},             // len=3, 3>2=true
-		{`""`, false},             // len=2, 2>2=false
-		{"hello", false},          // no quotes
-		{`"hello`, false},         // only opening quote, last char != '"'
-		{`hello"`, false},         // first char != '"'
-		{`'hello world'`, false},  // single quotes — first char is not '"'
+		{`"ab"`, true},           // len=4, 4>2=true
+		{`"x"`, true},            // len=3, 3>2=true
+		{`""`, false},            // len=2, 2>2=false
+		{"hello", false},         // no quotes
+		{`"hello`, false},        // only opening quote, last char != '"'
+		{`hello"`, false},        // first char != '"'
+		{`'hello world'`, false}, // single quotes — first char is not '"'
 	}
 
 	for _, tt := range tests {
@@ -116,10 +116,10 @@ func TestUnquote(t *testing.T) {
 	}{
 		{`"hello"`, "hello"},
 		{`"hello world"`, "hello world"},
-		{"hello", "hello"},         // no quotes — returned as-is
-		{`""`, ""},                 // empty quoted string — returns inner ""[1:1] = ""
-		{`"`, `"`},                 // single quote — len < 2, returned as-is
-		{"", ""},                   // empty string
+		{"hello", "hello"},               // no quotes — returned as-is
+		{`""`, ""},                       // empty quoted string — returns inner ""[1:1] = ""
+		{`"`, `"`},                       // single quote — len < 2, returned as-is
+		{"", ""},                         // empty string
 		{`"hello world`, `"hello world`}, // unclosed — last char != '"', returned as-is
 	}
 
