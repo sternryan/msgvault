@@ -1,0 +1,5 @@
+[oauth]
+client_secrets = "/Users/ryanstern/msgvault/client_secret_ryanatquartermint.json"
+
+[sync]
+rate_limit_qps = 5
