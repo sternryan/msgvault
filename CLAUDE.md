@@ -316,3 +316,10 @@ rate_limit_qps = 5
 - build-go skips frontend if you just need the binary fast
 - Binary requires CGO_ENABLED=1 (go-sqlite3 + go-duckdb are C-linked)
 - client_secret_ryanatquartermint.json is committed — do not leak
+
+## Ecosystem Role
+
+- **Tier:** T1 / Perception
+- **Produces:** Email archive (SQLite database)
+- **Consumers:** lifevault (vault importer), persona-pipeline (email extraction), vaulttrain-stern (DPO training pairs)
+- **Throughline ref:** See ~/throughline/architecture/data-flows.md
