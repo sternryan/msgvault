@@ -5,7 +5,7 @@ milestone_name: Web UI Rebuild (Templ + HTMX)
 status: complete
 stopped_at: Milestone v1.1 shipped
 last_updated: "2026-03-11"
-last_activity: 2026-03-11 — Milestone v1.1 completed and archived
+last_activity: 2026-03-29 — Completed quick task 260329-iwx: Fix roborev review bugs
 progress:
   total_phases: 6
   completed_phases: 6
@@ -32,6 +32,12 @@ Progress: [██████████] 100%
 
 ## Session Continuity
 
-Last session: 2026-03-11
-Stopped at: Milestone v1.1 shipped and archived
+Last session: 2026-03-29
+Stopped at: Quick task 260329-iwx completed
 Resume file: None
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260329-iwx | Fix roborev review bugs: timezone date filters, nil batch entries, missing attachment warning | 2026-03-29 | 16a22895 | [260329-iwx-fix-roborev-review-bugs-timezone-date-fi](./quick/260329-iwx-fix-roborev-review-bugs-timezone-date-fi/) |
