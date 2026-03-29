@@ -296,6 +296,10 @@ func (c *Client) GetMessageRaw(ctx context.Context, messageID string) (*gmail.Ra
 		return nil, fmt.Errorf("get message %s: %w", messageID, err)
 	}
 
+	if msg.HasAttachments != 0 {
+		c.logger.Warn("message has attachments that will not be archived (attachment extraction not yet implemented)", "id", messageID, "guid", msg.GUID)
+	}
+
 	// Determine sender and recipients
 	fromAddr, toAddrs := c.resolveParticipants(ctx, &msg)
 
@@ -416,15 +420,17 @@ func (c *Client) getChatParticipants(ctx context.Context, chatROWID int64) []str
 
 // GetMessagesRawBatch fetches multiple messages sequentially.
 // Since we're reading from a local database, parallelism adds no benefit.
+// Uses append so that individual fetch errors produce a compact slice with no
+// nil holes. The returned slice may be shorter than messageIDs when errors occur.
 func (c *Client) GetMessagesRawBatch(ctx context.Context, messageIDs []string) ([]*gmail.RawMessage, error) {
-	results := make([]*gmail.RawMessage, len(messageIDs))
-	for i, id := range messageIDs {
+	results := make([]*gmail.RawMessage, 0, len(messageIDs))
+	for _, id := range messageIDs {
 		msg, err := c.GetMessageRaw(ctx, id)
 		if err != nil {
 			c.logger.Warn("failed to fetch message", "id", id, "error", err)
 			continue
 		}
-		results[i] = msg
+		results = append(results, msg)
 	}
 	return results, nil
 }
