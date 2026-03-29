@@ -1,7 +1,8 @@
 package imessage
 
 import (
-	"fmt"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/mail"
 	"strings"
 	"time"
@@ -131,9 +132,14 @@ func buildMIME(fromAddr, toAddrs []string, date time.Time, messageID, body strin
 	// Subject (empty for iMessage - messages don't have subjects)
 	b.WriteString("Subject: \r\n")
 
-	// Message-ID
+	// Message-ID — hash the GUID since iMessage GUIDs contain characters
+	// like ':' and '/' that are invalid in RFC 5322 msg-id local-part.
 	if messageID != "" {
-		fmt.Fprintf(&b, "Message-ID: <%s@imessage.local>\r\n", messageID)
+		h := sha256.Sum256([]byte(messageID))
+		safeID := hex.EncodeToString(h[:12]) // 24 hex chars, unique enough
+		b.WriteString("Message-ID: <")
+		b.WriteString(safeID)
+		b.WriteString("@imessage.local>\r\n")
 	}
 
 	// MIME version and content type

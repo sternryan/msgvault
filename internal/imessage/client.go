@@ -326,8 +326,8 @@ func (c *Client) GetMessageRaw(ctx context.Context, messageID string) (*gmail.Ra
 
 	// Build label based on service
 	var labelIDs []string
-	if msg.Service != "" {
-		labelIDs = []string{msg.Service}
+	if msg.Service != nil && *msg.Service != "" {
+		labelIDs = []string{*msg.Service}
 	}
 
 	// InternalDate as Unix milliseconds

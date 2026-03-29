@@ -177,8 +177,13 @@ func TestBuildMIME(t *testing.T) {
 	if !strings.Contains(mimeStr, "Date: ") {
 		t.Error("missing Date header")
 	}
-	if !strings.Contains(mimeStr, "Message-ID: <p:0/ABC123@imessage.local>") {
+	// Message-ID is a hash of the GUID (RFC 5322 safe)
+	if !strings.Contains(mimeStr, "Message-ID: <") || !strings.Contains(mimeStr, "@imessage.local>") {
 		t.Error("missing Message-ID header")
+	}
+	// Verify the raw GUID with invalid chars is NOT present
+	if strings.Contains(mimeStr, "p:0/ABC123@imessage.local") {
+		t.Error("Message-ID should not contain raw GUID with invalid chars")
 	}
 	if !strings.Contains(mimeStr, "Content-Type: text/plain; charset=utf-8") {
 		t.Error("missing Content-Type header")

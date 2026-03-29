@@ -11,7 +11,7 @@ type messageRow struct {
 	AttributedBody  []byte  // NSKeyedArchiver blob; fallback when Text is nil (macOS Ventura+)
 	Date            int64   // Apple epoch timestamp (seconds or nanoseconds)
 	IsFromMe        int
-	Service         string // "iMessage" or "SMS"
+	Service         *string // "iMessage", "SMS", or NULL for system messages
 	HasAttachments  int
 	HandleID        *string // handle.id (phone or email), NULL for is_from_me
 	ChatROWID       *int64  // chat.ROWID for participant lookup
