@@ -2,7 +2,7 @@
 
 ## What This Is
 
-An offline Gmail archive tool that exports and stores email data locally with full-text search capabilities. Single-binary Go application with server-rendered web UI (Templ + HTMX). Built for archiving 20+ years of Gmail data from multiple accounts, making it searchable, and eventually deleting emails from Gmail once safely archived. Public repo under vanboompow.
+An offline Gmail archive tool that exports and stores email data locally with full-text search capabilities. Single-binary Go application with server-rendered web UI (Templ + HTMX). Built for archiving 20+ years of Gmail data from multiple accounts, making it searchable, and eventually deleting emails from Gmail once safely archived. Public repo under sternryan.
 
 ## Core Value
 
@@ -46,7 +46,7 @@ Users can safely archive their entire Gmail history offline and search it instan
 - Templ + HTMX server-rendered web UI (replaced React SPA in v1.1)
 - Bubble Tea TUI with lipgloss styling
 - DuckDB for Parquet queries, content-addressed attachment storage
-- Public repo under vanboompow GitHub org
+- Public repo under sternryan GitHub account
 - Data stored in ~/.msgvault/ by default (configurable via MSGVAULT_HOME)
 - Pre-commit hooks enforce gofmt + golangci-lint
 
