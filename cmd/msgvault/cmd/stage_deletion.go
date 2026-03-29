@@ -74,14 +74,14 @@ Examples:
 		}
 
 		if stageAfter != "" {
-			t, err := time.Parse("2006-01-02", stageAfter)
+			t, err := time.ParseInLocation("2006-01-02", stageAfter, time.Local)
 			if err != nil {
 				return fmt.Errorf("invalid --after date: %w", err)
 			}
 			filter.After = &t
 		}
 		if stageBefore != "" {
-			t, err := time.Parse("2006-01-02", stageBefore)
+			t, err := time.ParseInLocation("2006-01-02", stageBefore, time.Local)
 			if err != nil {
 				return fmt.Errorf("invalid --before date: %w", err)
 			}

@@ -64,7 +64,7 @@ func getDateArg(args map[string]any, key string) (*time.Time, error) {
 	if !ok || v == "" {
 		return nil, nil
 	}
-	t, err := time.Parse("2006-01-02", v)
+	t, err := time.ParseInLocation("2006-01-02", v, time.Local)
 	if err != nil {
 		return nil, fmt.Errorf("invalid %s date %q: expected YYYY-MM-DD", key, v)
 	}

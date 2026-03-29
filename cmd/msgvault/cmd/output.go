@@ -29,7 +29,7 @@ func parseCommonFlags() (query.AggregateOptions, error) {
 	}
 
 	if aggAfter != "" {
-		t, err := time.Parse("2006-01-02", aggAfter)
+		t, err := time.ParseInLocation("2006-01-02", aggAfter, time.Local)
 		if err != nil {
 			return opts, fmt.Errorf("invalid after date: %w", err)
 		}
@@ -37,7 +37,7 @@ func parseCommonFlags() (query.AggregateOptions, error) {
 	}
 
 	if aggBefore != "" {
-		t, err := time.Parse("2006-01-02", aggBefore)
+		t, err := time.ParseInLocation("2006-01-02", aggBefore, time.Local)
 		if err != nil {
 			return opts, fmt.Errorf("invalid before date: %w", err)
 		}

@@ -125,14 +125,14 @@ func runExportVault(cmd *cobra.Command, args []string) error {
 	}
 
 	if exportVaultAfter != "" {
-		opts.After, err = time.Parse("2006-01-02", exportVaultAfter)
+		opts.After, err = time.ParseInLocation("2006-01-02", exportVaultAfter, time.Local)
 		if err != nil {
 			return fmt.Errorf("invalid --after date (use YYYY-MM-DD): %w", err)
 		}
 	}
 
 	if exportVaultBefore != "" {
-		opts.Before, err = time.Parse("2006-01-02", exportVaultBefore)
+		opts.Before, err = time.ParseInLocation("2006-01-02", exportVaultBefore, time.Local)
 		if err != nil {
 			return fmt.Errorf("invalid --before date (use YYYY-MM-DD): %w", err)
 		}

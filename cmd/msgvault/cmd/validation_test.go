@@ -24,7 +24,7 @@ func validateDate(date string) error {
 	if date == "" {
 		return nil
 	}
-	if _, err := time.Parse("2006-01-02", date); err != nil {
+	if _, err := time.ParseInLocation("2006-01-02", date, time.Local); err != nil {
 		return fmt.Errorf("invalid date %q: use YYYY-MM-DD format", date)
 	}
 	return nil

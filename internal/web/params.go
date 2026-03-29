@@ -99,12 +99,12 @@ func parseAggregateOptions(r *http.Request) query.AggregateOptions {
 		opts.SearchQuery = v
 	}
 	if v := r.URL.Query().Get("after"); v != "" {
-		if t, err := time.Parse("2006-01-02", v); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", v, time.Local); err == nil {
 			opts.After = &t
 		}
 	}
 	if v := r.URL.Query().Get("before"); v != "" {
-		if t, err := time.Parse("2006-01-02", v); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", v, time.Local); err == nil {
 			opts.Before = &t
 		}
 	}
@@ -157,12 +157,12 @@ func parseMessageFilter(r *http.Request) query.MessageFilter {
 		filter.WithAttachmentsOnly = true
 	}
 	if v := r.URL.Query().Get("after"); v != "" {
-		if t, err := time.Parse("2006-01-02", v); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", v, time.Local); err == nil {
 			filter.After = &t
 		}
 	}
 	if v := r.URL.Query().Get("before"); v != "" {
-		if t, err := time.Parse("2006-01-02", v); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", v, time.Local); err == nil {
 			filter.Before = &t
 		}
 	}
