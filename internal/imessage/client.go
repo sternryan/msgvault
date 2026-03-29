@@ -274,7 +274,7 @@ func (c *Client) GetMessageRaw(ctx context.Context, messageID string) (*gmail.Ra
 	var msg messageRow
 	err = c.db.QueryRowContext(ctx, `
 		SELECT
-			m.ROWID, m.guid, m.text, m.date, m.is_from_me, m.service,
+			m.ROWID, m.guid, m.text, m.attributedBody, m.date, m.is_from_me, m.service,
 			m.cache_has_attachments,
 			h.id,
 			c.ROWID, c.guid, c.display_name, c.chat_identifier
@@ -284,7 +284,7 @@ func (c *Client) GetMessageRaw(ctx context.Context, messageID string) (*gmail.Ra
 		LEFT JOIN chat c ON c.ROWID = cmj.chat_id
 		WHERE m.ROWID = ?
 	`, rowID).Scan(
-		&msg.ROWID, &msg.GUID, &msg.Text, &msg.Date, &msg.IsFromMe, &msg.Service,
+		&msg.ROWID, &msg.GUID, &msg.Text, &msg.AttributedBody, &msg.Date, &msg.IsFromMe, &msg.Service,
 		&msg.HasAttachments,
 		&msg.HandleID,
 		&msg.ChatROWID, &msg.ChatGUID, &msg.ChatDisplayName, &msg.ChatIdentifier,
@@ -307,10 +307,13 @@ func (c *Client) GetMessageRaw(ctx context.Context, messageID string) (*gmail.Ra
 	// Convert Apple timestamp to time
 	msgDate := appleTimestampToTime(msg.Date)
 
-	// Get message body
+	// Get message body: prefer plain-text column, fall back to attributedBody blob
+	// (macOS Ventura+ / iOS 16+ stopped populating m.text for many message types).
 	body := ""
 	if msg.Text != nil {
 		body = *msg.Text
+	} else if len(msg.AttributedBody) > 0 {
+		body = extractAttributedBodyText(msg.AttributedBody)
 	}
 
 	// Build MIME
@@ -324,8 +327,8 @@ func (c *Client) GetMessageRaw(ctx context.Context, messageID string) (*gmail.Ra
 
 	// Build label based on service
 	var labelIDs []string
-	if msg.Service != "" {
-		labelIDs = []string{msg.Service}
+	if msg.Service != nil && *msg.Service != "" {
+		labelIDs = []string{*msg.Service}
 	}
 
 	// InternalDate as Unix milliseconds

@@ -1,10 +1,13 @@
 package imessage
 
 import (
-	"fmt"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/mail"
 	"strings"
 	"time"
+
+	"howett.net/plist"
 )
 
 // appleEpochOffset is the number of seconds between Unix epoch (1970-01-01)
@@ -129,9 +132,14 @@ func buildMIME(fromAddr, toAddrs []string, date time.Time, messageID, body strin
 	// Subject (empty for iMessage - messages don't have subjects)
 	b.WriteString("Subject: \r\n")
 
-	// Message-ID
+	// Message-ID — hash the GUID since iMessage GUIDs contain characters
+	// like ':' and '/' that are invalid in RFC 5322 msg-id local-part.
 	if messageID != "" {
-		fmt.Fprintf(&b, "Message-ID: <%s@imessage.local>\r\n", messageID)
+		h := sha256.Sum256([]byte(messageID))
+		safeID := hex.EncodeToString(h[:12]) // 24 hex chars, unique enough
+		b.WriteString("Message-ID: <")
+		b.WriteString(safeID)
+		b.WriteString("@imessage.local>\r\n")
 	}
 
 	// MIME version and content type
@@ -152,6 +160,50 @@ func buildMIME(fromAddr, toAddrs []string, date time.Time, messageID, body strin
 // formatMIMEAddress formats an email address for MIME headers.
 func formatMIMEAddress(addr string) string {
 	return (&mail.Address{Address: addr}).String()
+}
+
+// extractAttributedBodyText decodes an NSKeyedArchiver binary plist blob from
+// chat.db's attributedBody column and returns the plain text string.
+//
+// macOS Ventura+ / iOS 16+ stopped populating the plain-text "text" column for
+// most iMessages; the content lives exclusively in attributedBody as an
+// NSAttributedString archived via NSKeyedArchiver.
+func extractAttributedBodyText(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	var archive struct {
+		Top     map[string]plist.UID `plist:"$top"`
+		Objects []interface{}        `plist:"$objects"`
+	}
+	if _, err := plist.Unmarshal(data, &archive); err != nil {
+		return ""
+	}
+
+	rootUID, ok := archive.Top["root"]
+	if !ok || int(rootUID) >= len(archive.Objects) {
+		return ""
+	}
+
+	rootObj, ok := archive.Objects[rootUID].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	nsStringUID, ok := rootObj["NS.string"].(plist.UID)
+	if !ok {
+		return ""
+	}
+	if int(nsStringUID) >= len(archive.Objects) {
+		return ""
+	}
+
+	text, ok := archive.Objects[nsStringUID].(string)
+	if !ok {
+		return ""
+	}
+	return text
 }
 
 // snippet returns the first n characters of s, suitable for message preview.
