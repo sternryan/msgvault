@@ -82,7 +82,7 @@ Examples:
 		}
 
 		if imessageAfter != "" {
-			t, err := time.Parse("2006-01-02", imessageAfter)
+			t, err := time.ParseInLocation("2006-01-02", imessageAfter, time.Local)
 			if err != nil {
 				return fmt.Errorf("invalid --after date: %w (use YYYY-MM-DD format)", err)
 			}
@@ -90,7 +90,7 @@ Examples:
 		}
 
 		if imessageBefore != "" {
-			t, err := time.Parse("2006-01-02", imessageBefore)
+			t, err := time.ParseInLocation("2006-01-02", imessageBefore, time.Local)
 			if err != nil {
 				return fmt.Errorf("invalid --before date: %w (use YYYY-MM-DD format)", err)
 			}
