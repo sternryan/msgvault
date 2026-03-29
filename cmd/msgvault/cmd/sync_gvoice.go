@@ -66,7 +66,7 @@ Examples:
 		clientOpts = append(clientOpts, gvoice.WithLogger(logger))
 
 		if gvoiceAfter != "" {
-			t, err := time.Parse("2006-01-02", gvoiceAfter)
+			t, err := time.ParseInLocation("2006-01-02", gvoiceAfter, time.Local)
 			if err != nil {
 				return fmt.Errorf("invalid --after date: %w (use YYYY-MM-DD format)", err)
 			}
@@ -74,7 +74,7 @@ Examples:
 		}
 
 		if gvoiceBefore != "" {
-			t, err := time.Parse("2006-01-02", gvoiceBefore)
+			t, err := time.ParseInLocation("2006-01-02", gvoiceBefore, time.Local)
 			if err != nil {
 				return fmt.Errorf("invalid --before date: %w (use YYYY-MM-DD format)", err)
 			}
