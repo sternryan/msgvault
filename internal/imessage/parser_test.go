@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"howett.net/plist"
 )
 
 func TestAppleTimestampToTime(t *testing.T) {
@@ -175,8 +177,13 @@ func TestBuildMIME(t *testing.T) {
 	if !strings.Contains(mimeStr, "Date: ") {
 		t.Error("missing Date header")
 	}
-	if !strings.Contains(mimeStr, "Message-ID: <p:0/ABC123@imessage.local>") {
+	// Message-ID is a hash of the GUID (RFC 5322 safe)
+	if !strings.Contains(mimeStr, "Message-ID: <") || !strings.Contains(mimeStr, "@imessage.local>") {
 		t.Error("missing Message-ID header")
+	}
+	// Verify the raw GUID with invalid chars is NOT present
+	if strings.Contains(mimeStr, "p:0/ABC123@imessage.local") {
+		t.Error("Message-ID should not contain raw GUID with invalid chars")
 	}
 	if !strings.Contains(mimeStr, "Content-Type: text/plain; charset=utf-8") {
 		t.Error("missing Content-Type header")
@@ -210,6 +217,62 @@ func TestBuildMIME_EmptyBody(t *testing.T) {
 	parts := strings.SplitN(mimeStr, "\r\n\r\n", 2)
 	if len(parts) != 2 || parts[1] != "" {
 		t.Errorf("expected empty body, got %q", parts[1])
+	}
+}
+
+// makeAttributedBodyBlob builds a minimal NSKeyedArchiver binary plist blob
+// equivalent to an NSAttributedString with the given text.
+func makeAttributedBodyBlob(text string) []byte {
+	archive := struct {
+		Archiver string               `plist:"$archiver"`
+		Version  uint64               `plist:"$version"`
+		Top      map[string]plist.UID `plist:"$top"`
+		Objects  []interface{}        `plist:"$objects"`
+	}{
+		Archiver: "NSKeyedArchiver",
+		Version:  100000,
+		Top:      map[string]plist.UID{"root": 1},
+		Objects: []interface{}{
+			"$null",
+			map[string]interface{}{
+				"$class":    plist.UID(3),
+				"NS.string": plist.UID(2),
+			},
+			text,
+			map[string]interface{}{
+				"$classname": "NSAttributedString",
+				"$classes":   []string{"NSAttributedString", "NSObject"},
+			},
+		},
+	}
+	data, err := plist.Marshal(archive, plist.BinaryFormat)
+	if err != nil {
+		panic("makeAttributedBodyBlob: " + err.Error())
+	}
+	return data
+}
+
+func TestExtractAttributedBodyText(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+		want  string
+	}{
+		{"nil blob", nil, ""},
+		{"empty blob", []byte{}, ""},
+		{"invalid plist", []byte("not a plist"), ""},
+		{"plain ASCII message", makeAttributedBodyBlob("Hello from iMessage"), "Hello from iMessage"},
+		{"unicode and emoji", makeAttributedBodyBlob("Hey! \xf0\x9f\x98\x8a"), "Hey! \xf0\x9f\x98\x8a"},
+		{"multiline", makeAttributedBodyBlob("Line one\nLine two"), "Line one\nLine two"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractAttributedBodyText(tt.input)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
