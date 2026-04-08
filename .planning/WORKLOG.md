@@ -1,13 +1,11 @@
 # Worklog
 
-**Session 2026-03-29 — msgvault quick-task**
+**Session 2026-03-29 — msgvault PR review fixes (wesm/msgvault#224)**
 
-- Fixed 3 bugs from roborev CI review on wesm/msgvault#224 (iMessage sync PR)
-- Timezone date filters: replaced 18 `time.Parse("2006-01-02")` → `time.ParseInLocation(..., time.Local)` across 9 files (6 CLI commands, web params, MCP handler, validation test)
-- Batch nil entries: switched `GetMessagesRawBatch` in imessage + gvoice from pre-allocated indexed slice to append-based (compact, nil-free results)
-- Attachment warning: added Warn-level log when `cache_has_attachments != 0` in iMessage client (silent data loss → explicit)
-- Confirmed attributedBody fallback was already implemented (client.go:305-313)
-- Pushed fixes to `imessage-upstream` branch, updating PR #224 on wesm/msgvault
-- Posted PR comment addressing all 4 review items
-- 5 commits on main, 1 commit on imessage-upstream, all tests pass (35 packages)
-- No blockers or carryover
+- Addressed 2 rounds of roborev CI review on iMessage sync PR
+- Round 1 (3 fixes): timezone date filters (18 `time.Parse` → `time.ParseInLocation` across 9 files), batch nil entries (append-based `GetMessagesRawBatch` in imessage + gvoice), attachment warning (Warn-level log on `cache_has_attachments`)
+- Round 2 (3 fixes): attributedBody fallback (NSKeyedArchiver plist decoder + fallback when text is NULL), Message-ID sanitization (SHA-256 hash of GUID for RFC 5322 compliance), nullable Service field (`*string` to handle NULL on system messages)
+- 11 files changed across both branches, 35 test packages pass, 6 new tests added
+- 7 commits on main, 3 commits on imessage-upstream branch
+- Repo owner (wesm) responded: reviewing iMessage, WhatsApp, and Google Voice PRs together for storage layer coherence before merging
+- No blockers — waiting on owner review
