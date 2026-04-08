@@ -41,23 +41,43 @@ func (q *Query) IsEmpty() bool {
 		q.SmallerThan == nil
 }
 
-func toLowerFast(s string) string {
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			b := make([]byte, len(s))
-			copy(b, s[:i])
-			b[i] = c + 32
-			for i++; i < len(s); i++ {
-				c = s[i]
-				if c >= 'A' && c <= 'Z' {
-					b[i] = c + 32
-				} else {
-					b[i] = c
-				}
-			}
-			return string(b)
+// toLowerCopy allocates and lowercases s (slow path).
+//
+//go:noinline
+func toLowerCopy(s string) string {
+	b := make([]byte, len(s))
+	for j := range b {
+		if s[j]-'A' < 26 {
+			b[j] = s[j] + 32
+		} else {
+			b[j] = s[j]
 		}
+	}
+	return string(b)
+}
+
+// needsLower returns true if s contains any ASCII uppercase letter.
+// Kept small enough for the compiler to inline (no function calls).
+func needsLower(s string) bool {
+	n := len(s)
+	i := 0
+	for ; i+4 <= n; i += 4 {
+		if s[i]-'A' < 26 || s[i+1]-'A' < 26 || s[i+2]-'A' < 26 || s[i+3]-'A' < 26 {
+			return true
+		}
+	}
+	for ; i < n; i++ {
+		if s[i]-'A' < 26 {
+			return true
+		}
+	}
+	return false
+}
+
+// toLowerFast returns s lowercased; zero-alloc when already lowercase.
+func toLowerFast(s string) string {
+	if needsLower(s) {
+		return toLowerCopy(s)
 	}
 	return s
 }
@@ -91,18 +111,18 @@ type queryStore struct {
 	afterDate   time.Time
 	largerThan  int64
 	smallerThan int64
-	buf         [8]string // [0:3]=TextTerms, [3]=From, [4]=To, [5]=Cc, [6]=Subject, [7]=Label
+	buf         [6]string // fits 384-byte allocator class
 }
 
 func newQueryStore() *queryStore {
 	s := &queryStore{}
 	q := &s.query
-	q.TextTerms = s.buf[0:0:3]
-	q.FromAddrs = s.buf[3:3:4]
-	q.ToAddrs = s.buf[4:4:5]
-	q.CcAddrs = s.buf[5:5:6]
-	q.SubjectTerms = s.buf[6:6:7]
-	q.Labels = s.buf[7:7:8]
+	q.TextTerms = s.buf[0:0:1]
+	q.FromAddrs = s.buf[1:1:2]
+	q.ToAddrs = s.buf[2:2:3]
+	q.CcAddrs = s.buf[3:3:4]
+	q.SubjectTerms = s.buf[4:4:5]
+	q.Labels = s.buf[5:5:6]
 	return s
 }
 
@@ -254,13 +274,10 @@ func (p *Parser) Parse(queryStr string) *Query {
 
 	start := 0
 	colonRel := -1
-	for i := 0; i <= n; i++ {
-		b := byte(' ')
-		if i < n {
-			b = queryStr[i]
-			if b > ':' {
-				continue
-			}
+	for i := 0; i < n; i++ {
+		b := queryStr[i]
+		if b > ':' || b-'-' < 13 {
+			continue
 		}
 		if b == ' ' {
 			if i > start {
@@ -281,26 +298,47 @@ func (p *Parser) Parse(queryStr string) *Query {
 					case 2:
 						c0, c1 := token[0]|0x20, token[1]|0x20
 						if c0 == 't' && c1 == 'o' {
-							q.ToAddrs = append(q.ToAddrs, toLowerFast(value))
+							v := value
+							if needsLower(v) {
+								v = toLowerCopy(v)
+							}
+							q.ToAddrs = append(q.ToAddrs, v)
 						} else if c0 == 'c' && c1 == 'c' {
-							q.CcAddrs = append(q.CcAddrs, toLowerFast(value))
+							v := value
+							if needsLower(v) {
+								v = toLowerCopy(v)
+							}
+							q.CcAddrs = append(q.CcAddrs, v)
 						} else {
 							q.TextTerms = append(q.TextTerms, token)
 						}
 					case 3:
 						c0, c1, c2 := token[0]|0x20, token[1]|0x20, token[2]|0x20
 						if c0 == 'h' && c1 == 'a' && c2 == 's' {
-							if matchHasAttachment(value) {
+							nv := len(value)
+							if nv >= 10 && nv <= 11 &&
+								value[0]|0x20 == 'a' && value[1]|0x20 == 't' && value[2]|0x20 == 't' &&
+								value[3]|0x20 == 'a' && value[4]|0x20 == 'c' && value[5]|0x20 == 'h' &&
+								value[6]|0x20 == 'm' && value[7]|0x20 == 'e' && value[8]|0x20 == 'n' &&
+								value[9]|0x20 == 't' && (nv == 10 || value[10]|0x20 == 's') {
 								q.HasAttachment = &trueVal
 							}
 						} else if c0 == 'b' && c1 == 'c' && c2 == 'c' {
-							q.BccAddrs = append(q.BccAddrs, toLowerFast(value))
+							v := value
+							if needsLower(v) {
+								v = toLowerCopy(v)
+							}
+							q.BccAddrs = append(q.BccAddrs, v)
 						} else {
 							q.TextTerms = append(q.TextTerms, token)
 						}
 					case 4:
 						if token[0]|0x20 == 'f' && token[1]|0x20 == 'r' && token[2]|0x20 == 'o' && token[3]|0x20 == 'm' {
-							q.FromAddrs = append(q.FromAddrs, toLowerFast(value))
+							v := value
+							if needsLower(v) {
+								v = toLowerCopy(v)
+							}
+							q.FromAddrs = append(q.FromAddrs, v)
 						} else {
 							q.TextTerms = append(q.TextTerms, token)
 						}
@@ -311,7 +349,15 @@ func (p *Parser) Parse(queryStr string) *Query {
 								q.Labels = append(q.Labels, value)
 							}
 						} else if c0 == 'a' && token[1]|0x20 == 'f' && token[2]|0x20 == 't' && token[3]|0x20 == 'e' && token[4]|0x20 == 'r' {
-							if len(value) == 10 {
+							if len(value) == 10 && value[4] == '-' && value[7] == '-' {
+								y := int(value[0]-'0')*1000 + int(value[1]-'0')*100 + int(value[2]-'0')*10 + int(value[3]-'0')
+								m := int(value[5]-'0')*10 + int(value[6]-'0')
+								d := int(value[8]-'0')*10 + int(value[9]-'0')
+								if m >= 1 && m <= 12 && d >= 1 && d <= 31 {
+									s.afterDate = time.Unix(dateToUnixDays(y, m, d)*86400, 0).UTC()
+									q.AfterDate = &s.afterDate
+								}
+							} else if len(value) == 10 {
 								if t, ok := parseDateInline(value); ok {
 									s.afterDate = t
 									q.AfterDate = &s.afterDate
@@ -323,14 +369,45 @@ func (p *Parser) Parse(queryStr string) *Query {
 					case 6:
 						c0 := token[0] | 0x20
 						if c0 == 'b' && token[1]|0x20 == 'e' && token[2]|0x20 == 'f' && token[3]|0x20 == 'o' && token[4]|0x20 == 'r' && token[5]|0x20 == 'e' {
-							if len(value) == 10 {
+							if len(value) == 10 && value[4] == '-' && value[7] == '-' {
+								y := int(value[0]-'0')*1000 + int(value[1]-'0')*100 + int(value[2]-'0')*10 + int(value[3]-'0')
+								m := int(value[5]-'0')*10 + int(value[6]-'0')
+								d := int(value[8]-'0')*10 + int(value[9]-'0')
+								if m >= 1 && m <= 12 && d >= 1 && d <= 31 {
+									s.beforeDate = time.Unix(dateToUnixDays(y, m, d)*86400, 0).UTC()
+									q.BeforeDate = &s.beforeDate
+								}
+							} else if len(value) == 10 {
 								if t, ok := parseDateInline(value); ok {
 									s.beforeDate = t
 									q.BeforeDate = &s.beforeDate
 								}
 							}
 						} else if c0 == 'l' && token[1]|0x20 == 'a' && token[2]|0x20 == 'r' && token[3]|0x20 == 'g' && token[4]|0x20 == 'e' && token[5]|0x20 == 'r' {
-							if v, ok := parseSizeFast(value); ok {
+							if nv := len(value); nv >= 2 {
+								last := value[nv-1] | 0x20
+								if last == 'k' || last == 'm' || last == 'g' {
+									if num, ok := parseIntManual(value[:nv-1]); ok {
+										var mult int64
+										switch last {
+										case 'k':
+											mult = 1024
+										case 'm':
+											mult = 1024 * 1024
+										case 'g':
+											mult = 1024 * 1024 * 1024
+										}
+										s.largerThan = num * mult
+										q.LargerThan = &s.largerThan
+									} else if v, ok := parseSizeFast(value); ok {
+										s.largerThan = v
+										q.LargerThan = &s.largerThan
+									}
+								} else if v, ok := parseSizeFast(value); ok {
+									s.largerThan = v
+									q.LargerThan = &s.largerThan
+								}
+							} else if v, ok := parseSizeFast(value); ok {
 								s.largerThan = v
 								q.LargerThan = &s.largerThan
 							}
@@ -343,7 +420,30 @@ func (p *Parser) Parse(queryStr string) *Query {
 							if c1 == 'u' && token[2]|0x20 == 'b' && token[3]|0x20 == 'j' && token[4]|0x20 == 'e' && token[5]|0x20 == 'c' && token[6]|0x20 == 't' {
 								q.SubjectTerms = append(q.SubjectTerms, value)
 							} else if c1 == 'm' && token[2]|0x20 == 'a' && token[3]|0x20 == 'l' && token[4]|0x20 == 'l' && token[5]|0x20 == 'e' && token[6]|0x20 == 'r' {
-								if v, ok := parseSizeFast(value); ok {
+								if nv := len(value); nv >= 2 {
+									last := value[nv-1] | 0x20
+									if last == 'k' || last == 'm' || last == 'g' {
+										if num, ok := parseIntManual(value[:nv-1]); ok {
+											var mult int64
+											switch last {
+											case 'k':
+												mult = 1024
+											case 'm':
+												mult = 1024 * 1024
+											case 'g':
+												mult = 1024 * 1024 * 1024
+											}
+											s.smallerThan = num * mult
+											q.SmallerThan = &s.smallerThan
+										} else if v, ok := parseSizeFast(value); ok {
+											s.smallerThan = v
+											q.SmallerThan = &s.smallerThan
+										}
+									} else if v, ok := parseSizeFast(value); ok {
+										s.smallerThan = v
+										q.SmallerThan = &s.smallerThan
+									}
+								} else if v, ok := parseSizeFast(value); ok {
 									s.smallerThan = v
 									q.SmallerThan = &s.smallerThan
 								}
@@ -370,11 +470,25 @@ func (p *Parser) Parse(queryStr string) *Query {
 				dispatchToken(s, queryStr[start:i], colonRel, &now)
 			}
 			quoteChar := b
-			ci := strings.IndexByte(queryStr[i+1:], quoteChar)
-			if ci >= 0 {
-				endQ := i + 1 + ci
+			endQ := -1
+			if off := strings.IndexByte(queryStr[i+1:], quoteChar); off >= 0 {
+				endQ = i + 1 + off
+			}
+			if endQ >= 0 {
 				if afterColon {
-					dispatchToken(s, queryStr[start:endQ+1], colonRel, &now)
+					qtoken := queryStr[start:endQ+1]
+					qvalue := qtoken[colonRel+1:]
+					if len(qvalue) >= 2 && qvalue[0] == '"' && qvalue[len(qvalue)-1] == '"' {
+						qvalue = qvalue[1 : len(qvalue)-1]
+					}
+					if colonRel == 7 && qtoken[0]|0x20 == 's' && qtoken[1]|0x20 == 'u' &&
+						qtoken[2]|0x20 == 'b' && qtoken[3]|0x20 == 'j' &&
+						qtoken[4]|0x20 == 'e' && qtoken[5]|0x20 == 'c' &&
+						qtoken[6]|0x20 == 't' {
+						q.SubjectTerms = append(q.SubjectTerms, qvalue)
+					} else {
+						dispatchToken(s, qtoken, colonRel, &now)
+					}
 				} else {
 					if i+1 < endQ {
 						q.TextTerms = append(q.TextTerms, queryStr[i+1:endQ])
@@ -392,6 +506,13 @@ func (p *Parser) Parse(queryStr string) *Query {
 				}
 				return q
 			}
+		}
+	}
+	if start < n {
+		if colonRel < 0 {
+			q.TextTerms = append(q.TextTerms, queryStr[start:])
+		} else {
+			dispatchToken(s, queryStr[start:], colonRel, &now)
 		}
 	}
 	return q
