@@ -28,7 +28,7 @@ See: `milestones/v1.1-ROADMAP.md` for full phase details.
 
 **Milestone Goal:** Add semantic search and AI-powered enrichment to the 472K-message archive using $200 Azure credits before they expire 2026-05-11.
 
-- [ ] **Phase 12: Pipeline Infrastructure** - Azure OpenAI client, config, rate limiting, checkpointed batch runner
+- [x] **Phase 12: Pipeline Infrastructure** - Azure OpenAI client, config, rate limiting, checkpointed batch runner (completed 2026-04-11)
 - [ ] **Phase 13: Embeddings & Vector Search** - Embed all messages, sqlite-vec storage, CLI + web semantic search, hybrid re-ranking
 - [ ] **Phase 14: AI Enrichment & UI Integration** - Categorization, life events, entity extraction, label storage, TUI/web filters
 
@@ -43,10 +43,10 @@ See: `milestones/v1.1-ROADMAP.md` for full phase details.
   2. A batch job interrupted mid-run resumes from its last checkpoint rather than restarting from zero
   3. Running any AI pipeline command prints live message count, cost estimate, tokens/sec rate, and ETA
   4. The pipeline pauses automatically when TPM/RPM quota limits are approached and resumes without error
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 12-01-PLAN.md — Config, Azure OpenAI client, rate limiter, pipeline schema and Store methods
-- [ ] 12-02-PLAN.md — Batch runner framework with checkpoints, progress display, and validation CLI command
+- [x] 12-01-PLAN.md — Config, Azure OpenAI client, rate limiter, pipeline schema and Store methods
+- [x] 12-02-PLAN.md — Batch runner framework with checkpoints, progress display, and validation CLI command
 
 ### Phase 13: Embeddings & Vector Search
 **Goal**: Users can find semantically related emails using natural language queries, beyond exact keyword matching
@@ -78,6 +78,6 @@ Plans:
 |-------|-----------|-------|--------|-----------|
 | 1-5 | v1.0 | - | Complete | 2026-03-10 |
 | 6-11 | v1.1 | 13/13 | Complete | 2026-03-11 |
-| 12. Pipeline Infrastructure | v1.2 | 0/2 | Not started | - |
+| 12. Pipeline Infrastructure | v1.2 | 2/2 | Complete    | 2026-04-11 |
 | 13. Embeddings & Vector Search | v1.2 | 0/TBD | Not started | - |
 | 14. AI Enrichment & UI Integration | v1.2 | 0/TBD | Not started | - |
