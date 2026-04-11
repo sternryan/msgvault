@@ -407,3 +407,11 @@ CREATE INDEX IF NOT EXISTS idx_sync_runs_source ON sync_runs(source_id, started_
 -- Pipeline
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_type_status ON pipeline_runs(pipeline_type, status);
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started ON pipeline_runs(started_at DESC);
+
+-- ============================================================================
+-- VECTOR SEARCH (sqlite-vec)
+-- ============================================================================
+-- vec_messages is created programmatically via InitVectorTable()
+-- because virtual table IF NOT EXISTS syntax requires the sqlite-vec extension
+-- to be loaded, which happens after the driver connects (via sqlite3_auto_extension).
+-- InitSchema() calls InitVectorTable() after executing this file.
