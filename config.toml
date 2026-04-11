@@ -3,3 +3,6 @@ client_secrets = "/Users/ryanstern/msgvault/client_secret_ryanatquartermint.json
 
 [sync]
 rate_limit_qps = 5
+
+[microsoft]
+client_id = "51d82a6d-8fc3-4243-9396-63df2f7cfede"
