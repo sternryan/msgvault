@@ -43,7 +43,10 @@ See: `milestones/v1.1-ROADMAP.md` for full phase details.
   2. A batch job interrupted mid-run resumes from its last checkpoint rather than restarting from zero
   3. Running any AI pipeline command prints live message count, cost estimate, tokens/sec rate, and ETA
   4. The pipeline pauses automatically when TPM/RPM quota limits are approached and resumes without error
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 12-01-PLAN.md — Config, Azure OpenAI client, rate limiter, pipeline schema and Store methods
+- [ ] 12-02-PLAN.md — Batch runner framework with checkpoints, progress display, and validation CLI command
 
 ### Phase 13: Embeddings & Vector Search
 **Goal**: Users can find semantically related emails using natural language queries, beyond exact keyword matching
@@ -75,6 +78,6 @@ See: `milestones/v1.1-ROADMAP.md` for full phase details.
 |-------|-----------|-------|--------|-----------|
 | 1-5 | v1.0 | - | Complete | 2026-03-10 |
 | 6-11 | v1.1 | 13/13 | Complete | 2026-03-11 |
-| 12. Pipeline Infrastructure | v1.2 | 0/TBD | Not started | - |
+| 12. Pipeline Infrastructure | v1.2 | 0/2 | Not started | - |
 | 13. Embeddings & Vector Search | v1.2 | 0/TBD | Not started | - |
 | 14. AI Enrichment & UI Integration | v1.2 | 0/TBD | Not started | - |
