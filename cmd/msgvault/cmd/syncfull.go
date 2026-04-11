@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/gmail"
 	imaplib "github.com/wesm/msgvault/internal/imap"
+	"github.com/wesm/msgvault/internal/microsoft"
 	"github.com/wesm/msgvault/internal/oauth"
 	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/sync"
@@ -129,8 +130,21 @@ Examples:
 						continue
 					}
 				case "imap":
-					if !imaplib.HasCredentials(cfg.TokensDir(), src.Identifier) {
-						fmt.Printf("Skipping %s (no credentials - run 'add-imap' first)\n", src.Identifier)
+					hasAuth := imaplib.HasCredentials(cfg.TokensDir(), src.Identifier)
+					if !hasAuth && src.SyncConfig.Valid && src.SyncConfig.String != "" {
+						imapCfg, parseErr := imaplib.ConfigFromJSON(src.SyncConfig.String)
+						if parseErr == nil && imapCfg.EffectiveAuthMethod() == imaplib.AuthXOAuth2 {
+							msMgr := microsoft.NewManager(
+								cfg.Microsoft.ClientID,
+								cfg.Microsoft.EffectiveTenantID(),
+								cfg.TokensDir(),
+								logger,
+							)
+							hasAuth = msMgr.HasToken(imapCfg.Username)
+						}
+					}
+					if !hasAuth {
+						fmt.Printf("Skipping %s (no credentials - run 'add-imap' or 'add-o365' first)\n", src.Identifier)
 						continue
 					}
 				default:
@@ -214,17 +228,46 @@ func buildAPIClient(ctx context.Context, src *store.Source, getOAuthMgr func(str
 
 	case "imap":
 		if !src.SyncConfig.Valid || src.SyncConfig.String == "" {
-			return nil, fmt.Errorf("IMAP source %s has no config (run 'add-imap' first)", src.Identifier)
+			return nil, fmt.Errorf("IMAP source %s has no config (run 'add-imap' or 'add-o365' first)", src.Identifier)
 		}
 		imapCfg, err := imaplib.ConfigFromJSON(src.SyncConfig.String)
 		if err != nil {
 			return nil, fmt.Errorf("parse IMAP config: %w", err)
 		}
-		password, err := imaplib.LoadCredentials(cfg.TokensDir(), src.Identifier)
-		if err != nil {
-			return nil, fmt.Errorf("load IMAP credentials: %w (run 'add-imap' first)", err)
+
+		var clientOpts []imaplib.Option
+		clientOpts = append(clientOpts, imaplib.WithLogger(logger))
+
+		var password string
+		if imapCfg.EffectiveAuthMethod() == imaplib.AuthXOAuth2 {
+			// Microsoft 365 XOAUTH2: get token source from Microsoft OAuth manager
+			if cfg.Microsoft.ClientID == "" {
+				return nil, fmt.Errorf("Microsoft OAuth not configured for XOAUTH2 source %s\n\n"+
+					"add [microsoft] client_id to config.toml", src.Identifier)
+			}
+			msMgr := microsoft.NewManager(
+				cfg.Microsoft.ClientID,
+				cfg.Microsoft.EffectiveTenantID(),
+				cfg.TokensDir(),
+				logger,
+			)
+			if !msMgr.HasToken(imapCfg.Username) {
+				return nil, fmt.Errorf("no Microsoft token for %s (run 'add-o365 %s' first)", imapCfg.Username, imapCfg.Username)
+			}
+			ts, err := msMgr.TokenSource(ctx, imapCfg.Username)
+			if err != nil {
+				return nil, fmt.Errorf("get Microsoft token source: %w", err)
+			}
+			clientOpts = append(clientOpts, imaplib.WithTokenSource(ts))
+		} else {
+			// Standard password-based IMAP auth
+			var err error
+			password, err = imaplib.LoadCredentials(cfg.TokensDir(), src.Identifier)
+			if err != nil {
+				return nil, fmt.Errorf("load IMAP credentials: %w (run 'add-imap' first)", err)
+			}
 		}
-		return imaplib.NewClient(imapCfg, password, imaplib.WithLogger(logger)), nil
+		return imaplib.NewClient(imapCfg, password, clientOpts...), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported source type %q", src.SourceType)
