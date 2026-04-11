@@ -47,3 +47,8 @@ web/node_modules/
 internal/web/dist/
 .superpowers/
 .gstack/
+
+# Local data (synced separately to Mac Mini SSOT)
+analytics/
+attachments/
+tokens/
