@@ -32,6 +32,40 @@ func TestStore_GetSourcesByIdentifier(t *testing.T) {
 	}
 }
 
+func TestStore_GetSourcesByIdentifier_IMAPUri(t *testing.T) {
+	st := testutil.NewTestStore(t)
+
+	// IMAP sources store a full URI, not just the email
+	_, err := st.GetOrCreateSource("imap", "imaps://user@outlook.com@outlook.office365.com:993")
+	testutil.MustNoErr(t, err, "create imap source")
+
+	// Should be findable by the embedded email
+	sources, err := st.GetSourcesByIdentifier("user@outlook.com")
+	testutil.MustNoErr(t, err, "GetSourcesByIdentifier by email")
+	if len(sources) != 1 {
+		t.Fatalf("got %d sources, want 1", len(sources))
+	}
+	if sources[0].SourceType != "imap" {
+		t.Errorf("SourceType = %q, want imap", sources[0].SourceType)
+	}
+
+	// Should also be findable by the full URI
+	sources, err = st.GetSourcesByIdentifier("imaps://user@outlook.com@outlook.office365.com:993")
+	testutil.MustNoErr(t, err, "GetSourcesByIdentifier by full URI")
+	if len(sources) != 1 {
+		t.Fatalf("got %d sources, want 1 (full URI)", len(sources))
+	}
+
+	// Non-IMAP sources should NOT fuzzy match
+	_, err = st.GetOrCreateSource("gmail", "other@gmail.com")
+	testutil.MustNoErr(t, err, "create gmail source")
+	sources, err = st.GetSourcesByIdentifier("other@gmail.com")
+	testutil.MustNoErr(t, err, "GetSourcesByIdentifier gmail")
+	if len(sources) != 1 {
+		t.Fatalf("got %d sources, want 1 (gmail exact)", len(sources))
+	}
+}
+
 func TestStore_GetSourcesByIdentifier_NotFound(t *testing.T) {
 	st := testutil.NewTestStore(t)
 
