@@ -27,9 +27,18 @@ Users can safely archive their entire Gmail history offline and search it instan
 - ✓ Loading Indicators: HTMX indicator on all 42 partial update trigger points — v1.1
 - ✓ CSS Bar Chart: Pure CSS time-series chart on dashboard — v1.1
 
-### Active
+## Current Milestone: v1.2 AI Archive Intelligence
 
-(None — next milestone not yet defined)
+**Goal:** Use $200 Azure credits (expiring ~2026-05-11) to add semantic search and AI-powered enrichment to the 472K-message archive.
+
+**Target features:**
+- Semantic embeddings for the entire archive via Azure OpenAI text-embedding-3-small
+- Vector search via sqlite-vec for semantic queries beyond FTS5
+- Life timeline extraction — classify emails for life events and export to LifeVault-compatible format
+- Smart categorization — finance, travel, legal, health, shopping labels across all 6 accounts
+- Go batch pipeline with Azure OpenAI SDK, progress tracking, resumability
+
+### Active
 
 ### Out of Scope
 
@@ -76,4 +85,22 @@ Users can safely archive their entire Gmail history offline and search it instan
 | Universal #page-indicator | Persistent across #main-content swaps | ✓ Good — simpler than per-trigger |
 
 ---
-*Last updated: 2026-03-11 after v1.1 milestone completion*
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
+---
+*Last updated: 2026-04-11 after v1.2 milestone start*
