@@ -315,6 +315,45 @@ CREATE TABLE IF NOT EXISTS sync_checkpoints (
 );
 
 -- ============================================================================
+-- AI PIPELINE STATE
+-- ============================================================================
+
+-- Pipeline runs (batch job tracking)
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id INTEGER PRIMARY KEY,
+    pipeline_type TEXT NOT NULL,       -- 'embedding', 'categorize', 'life_events', 'entities'
+    status TEXT NOT NULL DEFAULT 'running',  -- 'running', 'completed', 'failed', 'cancelled'
+    started_at DATETIME NOT NULL,
+    completed_at DATETIME,
+
+    -- Progress counters
+    total_messages INTEGER DEFAULT 0,
+    processed_messages INTEGER DEFAULT 0,
+    skipped_messages INTEGER DEFAULT 0,
+    failed_messages INTEGER DEFAULT 0,
+
+    -- Cost tracking
+    total_tokens_input INTEGER DEFAULT 0,
+    total_tokens_output INTEGER DEFAULT 0,
+    estimated_cost_usd REAL DEFAULT 0.0,
+
+    -- Error info
+    error_message TEXT,
+
+    -- Filter criteria (JSON: e.g. {"source_id": 1, "after": "2024-01-01"})
+    filter_criteria TEXT
+);
+
+-- Pipeline checkpoints (for resumability)
+CREATE TABLE IF NOT EXISTS pipeline_checkpoints (
+    pipeline_run_id INTEGER NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
+    last_message_id INTEGER NOT NULL,  -- last successfully processed message ID
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (pipeline_run_id)
+);
+
+-- ============================================================================
 -- INDEXES
 -- ============================================================================
 
@@ -364,3 +403,7 @@ CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label_id);
 
 -- Sync
 CREATE INDEX IF NOT EXISTS idx_sync_runs_source ON sync_runs(source_id, started_at DESC);
+
+-- Pipeline
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_type_status ON pipeline_runs(pipeline_type, status);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started ON pipeline_runs(started_at DESC);
