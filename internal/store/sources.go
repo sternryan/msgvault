@@ -11,14 +11,17 @@ import (
 func (s *Store) GetSourcesByIdentifier(
 	identifier string,
 ) ([]*Source, error) {
+	// Exact match first, then fall back to matching IMAP URIs that
+	// embed the email (e.g. "imaps://user@host@server:993").
 	rows, err := s.db.Query(`
 		SELECT id, source_type, identifier, display_name,
 		       google_user_id, last_sync_at, sync_cursor, sync_config,
 		       oauth_app, created_at, updated_at
 		FROM sources
 		WHERE identifier = ?
+		   OR (source_type = 'imap' AND identifier LIKE '%://' || ? || '@%')
 		ORDER BY source_type
-	`, identifier)
+	`, identifier, identifier)
 	if err != nil {
 		return nil, fmt.Errorf("query sources: %w", err)
 	}
