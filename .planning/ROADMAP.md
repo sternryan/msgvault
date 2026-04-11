@@ -29,7 +29,7 @@ See: `milestones/v1.1-ROADMAP.md` for full phase details.
 **Milestone Goal:** Add semantic search and AI-powered enrichment to the 472K-message archive using $200 Azure credits before they expire 2026-05-11.
 
 - [x] **Phase 12: Pipeline Infrastructure** - Azure OpenAI client, config, rate limiting, checkpointed batch runner (completed 2026-04-11)
-- [ ] **Phase 13: Embeddings & Vector Search** - Embed all messages, sqlite-vec storage, CLI + web semantic search, hybrid re-ranking
+- [x] **Phase 13: Embeddings & Vector Search** - Embed all messages, sqlite-vec storage, CLI + web semantic search, hybrid re-ranking (completed 2026-04-11)
 - [ ] **Phase 14: AI Enrichment & UI Integration** - Categorization, life events, entity extraction, label storage, TUI/web filters
 
 ## Phase Details
@@ -57,10 +57,10 @@ Plans:
   2. `msgvault search --semantic "query"` returns results ranked by vector similarity from the CLI
   3. The web UI search page accepts a semantic query and displays results ranked by similarity score
   4. Hybrid search combines FTS5 keyword matches with vector similarity and re-ranks results — a query like "flight to Japan" finds both exact matches and semantically related messages
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 13-01-PLAN.md — sqlite-vec integration, embedding pipeline, CLI semantic search
-- [ ] 13-02-PLAN.md — Hybrid RRF re-ranking, web UI semantic/hybrid tabs with similarity badges
+- [x] 13-01-PLAN.md — sqlite-vec integration, embedding pipeline, CLI semantic search
+- [x] 13-02-PLAN.md — Hybrid RRF re-ranking, web UI semantic/hybrid tabs with similarity badges
 
 ### Phase 14: AI Enrichment & UI Integration
 **Goal**: Users can browse their archive by AI-generated categories and extract a structured life timeline
@@ -81,5 +81,5 @@ Plans:
 | 1-5 | v1.0 | - | Complete | 2026-03-10 |
 | 6-11 | v1.1 | 13/13 | Complete | 2026-03-11 |
 | 12. Pipeline Infrastructure | v1.2 | 2/2 | Complete    | 2026-04-11 |
-| 13. Embeddings & Vector Search | v1.2 | 0/2 | Planning | - |
+| 13. Embeddings & Vector Search | v1.2 | 2/2 | Complete    | 2026-04-11 |
 | 14. AI Enrichment & UI Integration | v1.2 | 0/TBD | Not started | - |
