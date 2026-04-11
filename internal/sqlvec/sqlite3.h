@@ -1,0 +1,1 @@
+/Users/ryanstern/go/pkg/mod/github.com/mutecomm/go-sqlcipher/v4@v4.4.2/sqlite3.h

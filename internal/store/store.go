@@ -376,6 +376,12 @@ func (s *Store) InitSchema() error {
 		}
 	}
 
+	// Initialize sqlite-vec virtual table (vec_messages).
+	// Must happen after the core schema so the pipeline_runs table exists.
+	if err := s.InitVectorTable(); err != nil {
+		return fmt.Errorf("init vector table: %w", err)
+	}
+
 	// Try to load and execute SQLite-specific schema (FTS5)
 	// This is optional - FTS5 may not be available in all builds
 	sqliteSchema, err := schemaFS.ReadFile("schema_sqlite.sql")
