@@ -74,6 +74,7 @@ type Config struct {
 	OAuth      OAuthConfig       `toml:"oauth"`
 	Sync       SyncConfig        `toml:"sync"`
 	Encryption EncryptionConfig  `toml:"encryption"`
+	Microsoft  MicrosoftConfig   `toml:"microsoft"`
 	Chat       ChatConfig        `toml:"chat"`
 	Server     ServerConfig      `toml:"server"`
 	Remote     RemoteConfig      `toml:"remote"`
@@ -88,6 +89,20 @@ type Config struct {
 type EncryptionConfig struct {
 	Enabled       bool `toml:"enabled"`
 	KDFIterations int  `toml:"kdf_iterations"`
+}
+
+// MicrosoftConfig holds Microsoft 365 / Azure AD OAuth configuration.
+type MicrosoftConfig struct {
+	ClientID string `toml:"client_id"`
+	TenantID string `toml:"tenant_id"` // defaults to "common" for multi-tenant
+}
+
+// EffectiveTenantID returns the tenant ID, defaulting to "common".
+func (m *MicrosoftConfig) EffectiveTenantID() string {
+	if m.TenantID == "" {
+		return "common"
+	}
+	return m.TenantID
 }
 
 // DataConfig holds data storage configuration.

@@ -10,13 +10,28 @@ import (
 	"strings"
 )
 
+// Auth method constants for IMAP authentication.
+const (
+	AuthPassword = "basic"   // Password-based (PLAIN/LOGIN)
+	AuthXOAuth2  = "xoauth2" // XOAUTH2 SASL mechanism
+)
+
 // Config holds connection settings for an IMAP server.
 type Config struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	TLS      bool   `json:"tls"`      // Implicit TLS (IMAPS, port 993)
-	STARTTLS bool   `json:"starttls"` // STARTTLS upgrade (port 143)
-	Username string `json:"username"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	TLS        bool   `json:"tls"`      // Implicit TLS (IMAPS, port 993)
+	STARTTLS   bool   `json:"starttls"` // STARTTLS upgrade (port 143)
+	Username   string `json:"username"`
+	AuthMethod string `json:"auth_method,omitempty"` // "basic" (default) or "xoauth2"
+}
+
+// EffectiveAuthMethod returns the auth method, defaulting to password-based.
+func (c *Config) EffectiveAuthMethod() string {
+	if c.AuthMethod == "" {
+		return AuthPassword
+	}
+	return c.AuthMethod
 }
 
 // Addr returns the "host:port" string.

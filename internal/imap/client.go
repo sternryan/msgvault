@@ -22,6 +22,12 @@ func WithLogger(logger *slog.Logger) Option {
 	return func(c *Client) { c.logger = logger }
 }
 
+// WithTokenSource sets a callback that provides fresh XOAUTH2 access tokens.
+// Required when Config.AuthMethod is "xoauth2".
+func WithTokenSource(fn func(context.Context) (string, error)) Option {
+	return func(c *Client) { c.tokenSource = fn }
+}
+
 // fetchChunkSize is the maximum number of UIDs per UID FETCH command.
 // Large FETCH sets cause server-side timeouts on big mailboxes; chunking
 // keeps each round-trip short.
@@ -36,6 +42,8 @@ type Client struct {
 	config   *Config
 	password string
 	logger   *slog.Logger
+
+	tokenSource func(context.Context) (string, error) // XOAUTH2 token provider
 
 	mu               sync.Mutex
 	conn             *imapclient.Client
@@ -87,9 +95,22 @@ func (c *Client) connect(ctx context.Context) error {
 		return fmt.Errorf("dial IMAP %s: %w", addr, err)
 	}
 
-	if err := conn.Login(c.config.Username, c.password).Wait(); err != nil {
-		_ = conn.Close()
-		return fmt.Errorf("IMAP login: %w", err)
+	if c.config.EffectiveAuthMethod() == AuthXOAuth2 && c.tokenSource != nil {
+		token, err := c.tokenSource(ctx)
+		if err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("get XOAUTH2 token: %w", err)
+		}
+		saslClient := NewXOAuth2Client(c.config.Username, token)
+		if err := conn.Authenticate(saslClient); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("IMAP XOAUTH2 auth: %w", err)
+		}
+	} else {
+		if err := conn.Login(c.config.Username, c.password).Wait(); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("IMAP login: %w", err)
+		}
 	}
 
 	c.conn = conn
