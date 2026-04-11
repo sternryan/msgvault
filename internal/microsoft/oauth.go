@@ -25,17 +25,25 @@ import (
 
 const (
 	DefaultTenant   = "common"
-	ScopeIMAP       = "https://outlook.office365.com/IMAP.AccessAsUser.All"
+	ScopeIMAP       = "https://outlook.office.com/IMAP.AccessAsUser.All"
 	callbackPath    = "/callback/microsoft"
 	graphMeEndpoint = "https://graph.microsoft.com/v1.0/me"
 )
 
-var Scopes = []string{
+// IMAPScopes are used in the token exchange (single-resource constraint).
+var IMAPScopes = []string{
+	ScopeIMAP,
+	"offline_access",
+}
+
+// AuthorizeScopes include openid/email/User.Read for the initial consent screen
+// but Azure AD returns a token scoped to the first resource only.
+var AuthorizeScopes = []string{
 	ScopeIMAP,
 	"offline_access",
 	"openid",
 	"email",
-	"User.Read", // required for MS Graph /me to validate email
+	"User.Read",
 }
 
 type TokenMismatchError struct {
@@ -85,7 +93,7 @@ func (m *Manager) oauthConfig(redirectURL string) *oauth2.Config {
 			TokenURL: tokenURL,
 		},
 		RedirectURL: redirectURL,
-		Scopes:      Scopes,
+		Scopes:      AuthorizeScopes,
 	}
 }
 
@@ -108,10 +116,11 @@ func (m *Manager) Authorize(ctx context.Context, email string, headless bool) er
 	if err != nil {
 		return err
 	}
-	if _, err := m.resolveTokenEmail(ctx, email, token); err != nil {
-		return err
-	}
-	return m.saveToken(email, token, Scopes)
+	// Note: we skip resolveTokenEmail here because the token is scoped to
+	// outlook.office.com (IMAP), not graph.microsoft.com (User.Read).
+	// Azure AD v2.0 doesn't allow mixing resource scopes in one token request.
+	// The IMAP login itself validates the email matches the authorized account.
+	return m.saveToken(email, token, IMAPScopes)
 }
 
 // TokenSource returns a function that provides fresh access tokens.
@@ -148,7 +157,7 @@ func (m *Manager) browserFlow(ctx context.Context, email string) (*oauth2.Token,
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 
-	redirectURL := fmt.Sprintf("http://localhost:%d%s", port, callbackPath)
+	redirectURL := fmt.Sprintf("http://localhost:%d", port)
 	cfg := m.oauthConfig(redirectURL)
 
 	// PKCE (required by Azure AD for public clients)
@@ -173,7 +182,7 @@ func (m *Manager) browserFlow(ctx context.Context, email string) (*oauth2.Token,
 	errChan := make(chan error, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("state") != state {
 			errChan <- fmt.Errorf("state mismatch: possible CSRF attack")
 			fmt.Fprintf(w, "Error: state mismatch")
@@ -219,6 +228,7 @@ func (m *Manager) browserFlow(ctx context.Context, email string) (*oauth2.Token,
 	case code := <-codeChan:
 		return cfg.Exchange(ctx, code,
 			oauth2.SetAuthURLParam("code_verifier", verifier),
+			oauth2.SetAuthURLParam("scope", strings.Join(IMAPScopes, " ")),
 		)
 	case err := <-errChan:
 		return nil, err
@@ -235,7 +245,7 @@ func (m *Manager) deviceCodeFlow(ctx context.Context, email string) (*oauth2.Tok
 	// Request device code
 	resp, err := http.PostForm(deviceURL, url.Values{
 		"client_id": {m.clientID},
-		"scope":     {strings.Join(Scopes, " ")},
+		"scope":     {strings.Join(IMAPScopes, " ")},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("request device code: %w", err)

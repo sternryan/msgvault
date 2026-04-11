@@ -228,7 +228,7 @@ func TestTokenSource_RefreshAndSave(t *testing.T) {
 		TokenType:    "Bearer",
 		Expiry:       time.Now().Add(-time.Hour), // expired
 	}
-	if err := m.saveToken("user@example.com", expiredToken, Scopes); err != nil {
+	if err := m.saveToken("user@example.com", expiredToken, IMAPScopes); err != nil {
 		t.Fatal(err)
 	}
 
