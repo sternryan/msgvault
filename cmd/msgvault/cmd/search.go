@@ -21,6 +21,7 @@ var (
 	searchJSON     bool
 	searchAccount  string
 	searchSemantic bool
+	searchHybrid   bool
 )
 
 var searchCmd = &cobra.Command{
@@ -62,9 +63,19 @@ Examples:
 			return fmt.Errorf("provide a search query or --account flag")
 		}
 
+		// Validate mutual exclusion.
+		if searchSemantic && searchHybrid {
+			return fmt.Errorf("--semantic and --hybrid are mutually exclusive; choose one")
+		}
+
 		// Semantic search: bypass FTS5/DuckDB and use vector similarity.
 		if searchSemantic {
 			return runSemanticSearch(cmd, queryStr)
+		}
+
+		// Hybrid search: combine FTS5 + vector via RRF.
+		if searchHybrid {
+			return runHybridSearch(cmd, queryStr)
 		}
 
 		// Use remote search if configured
@@ -343,6 +354,105 @@ func outputSemanticResultsJSON(results []embedding.SemanticResult) error {
 	return printJSON(output)
 }
 
+// runHybridSearch combines FTS5 keyword and vector similarity search via RRF.
+func runHybridSearch(cmd *cobra.Command, queryStr string) error {
+	if queryStr == "" {
+		return fmt.Errorf("provide a search query for hybrid search")
+	}
+
+	if cfg.AzureOpenAI.Endpoint == "" {
+		return fmt.Errorf("azure_openai.endpoint not configured — hybrid search requires Azure OpenAI\n\n" +
+			"Run 'msgvault embed' first to embed your messages, then configure:\n" +
+			"  [azure_openai]\n" +
+			"  endpoint = \"https://YOUR-INSTANCE.openai.azure.com\"")
+	}
+
+	dbPath := cfg.DatabaseDSN()
+	s, err := store.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer s.Close()
+
+	if err := s.InitSchema(); err != nil {
+		return fmt.Errorf("init schema: %w", err)
+	}
+
+	if err := ensureFTSIndex(s); err != nil {
+		return err
+	}
+
+	aiClient, err := ai.NewClient(cfg.AzureOpenAI, ai.WithLogger(logger))
+	if err != nil {
+		return fmt.Errorf("create AI client: %w", err)
+	}
+
+	engine := query.NewSQLiteEngine(s.DB())
+
+	fmt.Fprintf(os.Stderr, "Hybrid searching...")
+
+	results, err := embedding.HybridSearch(cmd.Context(), aiClient, s, engine, queryStr, searchLimit)
+	fmt.Fprintf(os.Stderr, "\r                  \r")
+	if err != nil {
+		return fmt.Errorf("hybrid search: %w", err)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No messages found.")
+		return nil
+	}
+
+	if searchJSON {
+		return outputHybridResultsJSON(results)
+	}
+	return outputHybridResultsTable(results)
+}
+
+func outputHybridResultsTable(results []embedding.SemanticResult) error {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tDATE\tFROM\tSUBJECT\tSIMILARITY")
+	fmt.Fprintln(w, "──\t────\t────\t───────\t──────────")
+
+	for _, r := range results {
+		date := r.SentAt.Format("2006-01-02")
+		from := truncate(r.FromEmail, 30)
+		subject := truncate(r.Subject, 50)
+		var similarity string
+		if r.SimilarityPct == 0 {
+			similarity = "---"
+		} else {
+			similarity = fmt.Sprintf("%.1f%%", r.SimilarityPct)
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", r.ID, date, from, subject, similarity)
+	}
+
+	w.Flush()
+	fmt.Printf("\nShowing %d results\n", len(results))
+	return nil
+}
+
+func outputHybridResultsJSON(results []embedding.SemanticResult) error {
+	output := make([]map[string]interface{}, len(results))
+	for i, r := range results {
+		output[i] = map[string]interface{}{
+			"id":                     r.ID,
+			"source_message_id":      r.SourceMessageID,
+			"conversation_id":        r.ConversationID,
+			"source_conversation_id": r.SourceConversationID,
+			"subject":                r.Subject,
+			"snippet":                r.Snippet,
+			"from_email":             r.FromEmail,
+			"from_name":              r.FromName,
+			"sent_at":                r.SentAt.Format(time.RFC3339),
+			"size_estimate":          r.SizeEstimate,
+			"has_attachments":        r.HasAttachments,
+			"attachment_count":       r.AttachmentCount,
+			"similarity_pct":         r.SimilarityPct,
+		}
+	}
+	return printJSON(output)
+}
+
 func init() {
 	rootCmd.AddCommand(searchCmd)
 	searchCmd.Flags().IntVarP(&searchLimit, "limit", "n", 50, "Maximum number of results")
@@ -350,6 +460,7 @@ func init() {
 	searchCmd.Flags().BoolVar(&searchJSON, "json", false, "Output as JSON")
 	searchCmd.Flags().StringVar(&searchAccount, "account", "", "Limit results to a specific account (email address)")
 	searchCmd.Flags().BoolVar(&searchSemantic, "semantic", false, "Use vector similarity search (requires msgvault embed to have been run)")
+	searchCmd.Flags().BoolVar(&searchHybrid, "hybrid", false, "Use hybrid FTS5+vector search with RRF re-ranking (requires msgvault embed)")
 }
 
 // ensureFTSIndex checks if the FTS search index needs to be built and
