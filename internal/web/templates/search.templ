@@ -3,13 +3,38 @@ package templates
 import (
 	"fmt"
 
+	"github.com/wesm/msgvault/internal/embedding"
 	"github.com/wesm/msgvault/internal/query"
 )
 
+// similarityBadgeClass returns a CSS class based on the similarity percentage.
+// >= 80%: green, >= 60%: yellow, else gray.
+func similarityBadgeClass(pct float64) string {
+	switch {
+	case pct >= 80:
+		return "similarity-badge similarity-high"
+	case pct >= 60:
+		return "similarity-badge similarity-mid"
+	default:
+		return "similarity-badge similarity-low"
+	}
+}
+
+// formatSimilarity formats a similarity percentage for display.
+// Returns "---" for zero (keyword-only match in hybrid mode).
+func formatSimilarity(pct float64) string {
+	if pct == 0 {
+		return "---"
+	}
+	return fmt.Sprintf("%.1f%%", pct)
+}
+
 // SearchPage renders the search page with a debounced search input and results.
-// mode is "metadata" for DuckDB fast path, "full-text" for FTS5 fallback.
+// mode: "metadata" | "full-text" | "semantic" | "hybrid"
+// semanticResults: non-nil when mode is "semantic" or "hybrid"
+// hasAI: controls whether Semantic/Hybrid tabs are shown
 // offset is the current pagination offset (0-based).
-templ SearchPage(q string, results []query.MessageSummary, total int64, baseURL string, mode string, offset int) {
+templ SearchPage(q string, results []query.MessageSummary, total int64, baseURL string, mode string, offset int, semanticResults []embedding.SemanticResult, hasAI bool) {
 	<div class="page-content" id="main-content">
 		<div class="page-header">
 			<h2 class="page-title">Search</h2>
@@ -25,13 +50,50 @@ templ SearchPage(q string, results []query.MessageSummary, total int64, baseURL 
 				hx-select="#main-content"
 				hx-target="#main-content"
 				hx-replace-url="true"
-				hx-include="[name='sourceId']"
+				hx-include="[name='sourceId'],[name='mode']"
 				hx-indicator="#search-indicator"
 				class="search-input"
 				autofocus
 			/>
-			<span id="search-indicator" class="htmx-indicator">Searching...</span>
+			<span id="search-indicator" class="htmx-indicator">
+				if mode == "semantic" {
+					Searching semantically...
+				} else if mode == "hybrid" {
+					Hybrid searching...
+				} else {
+					Searching...
+				}
+			</span>
 		</div>
+		if hasAI {
+			<div class="search-tabs">
+				<input type="hidden" name="mode" value={ mode }/>
+				<button
+					class={ "search-tab", templ.KV("active", mode != "semantic" && mode != "hybrid") }
+					hx-get={ "/search?q=" + q + "&mode=keyword" }
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-replace-url="true"
+					hx-indicator="#search-indicator"
+				>Keyword</button>
+				<button
+					class={ "search-tab", templ.KV("active", mode == "semantic") }
+					hx-get={ "/search?q=" + q + "&mode=semantic" }
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-replace-url="true"
+					hx-indicator="#search-indicator"
+				>Semantic</button>
+				<button
+					class={ "search-tab", templ.KV("active", mode == "hybrid") }
+					hx-get={ "/search?q=" + q + "&mode=hybrid" }
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-replace-url="true"
+					hx-indicator="#search-indicator"
+				>Hybrid</button>
+			</div>
+		}
 		<div id="search-results">
 			if q == "" {
 				<div class="search-help">
@@ -48,6 +110,54 @@ templ SearchPage(q string, results []query.MessageSummary, total int64, baseURL 
 						<li><code>meeting notes</code> — full-text search</li>
 					</ul>
 				</div>
+			} else if (mode == "semantic" || mode == "hybrid") && semanticResults != nil {
+				if len(semanticResults) == 0 {
+					<div class="empty-state">
+						<p>No results for &ldquo;{ q }&rdquo;.</p>
+					</div>
+				} else {
+					<div class="table-meta">
+						{ FormatNum(int64(len(semanticResults))) } { Pluralize(int64(len(semanticResults)), "result", "results") }
+						if mode == "semantic" {
+							<span class="search-mode-badge">(semantic search)</span>
+						} else {
+							<span class="search-mode-badge">(hybrid search)</span>
+						}
+					</div>
+					<table class="data-table messages-table">
+						<thead>
+							<tr>
+								<th>From</th>
+								<th>Subject</th>
+								<th>Date</th>
+								<th>Size</th>
+								<th>Similarity</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, sr := range semanticResults {
+								<tr
+									class="clickable-row message-row"
+									data-href={ fmt.Sprintf("/messages/%d", sr.ID) }
+									hx-get={ fmt.Sprintf("/messages/%d", sr.ID) }
+									hx-select="#main-content"
+									hx-target="#main-content"
+									hx-swap="outerHTML"
+									hx-replace-url="true"
+									hx-indicator="#page-indicator"
+								>
+									<td class="col-from" title={ sr.FromEmail }>{ truncateStr(displayFrom(sr.FromName, sr.FromEmail), 30) }</td>
+									<td class="col-subject" title={ sr.Snippet }>{ truncateStr(sr.Subject, 60) }</td>
+									<td class="col-date">{ FormatDate(sr.SentAt) }</td>
+									<td class="col-size">{ FormatBytes(sr.SizeEstimate) }</td>
+									<td class="col-similarity">
+										<span class={ similarityBadgeClass(sr.SimilarityPct) }>{ formatSimilarity(sr.SimilarityPct) }</span>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
 			} else if len(results) == 0 {
 				<div class="empty-state">
 					<p>No results for &ldquo;{ q }&rdquo;.</p>

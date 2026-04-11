@@ -1017,3 +1017,60 @@ kbd {
     position: relative;
     top: 0.25rem;
 }
+
+/* ---- Search mode tabs ---- */
+.search-tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin: 0.5rem 0 0.75rem 0;
+    border-bottom: 1px solid var(--base02);
+    padding-bottom: 0;
+}
+.search-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0.4rem 0.9rem;
+    cursor: pointer;
+    color: var(--base1);
+    font-size: 0.875rem;
+    font-family: inherit;
+    margin-bottom: -1px;
+    transition: color 0.1s, border-color 0.1s;
+}
+.search-tab:hover {
+    color: var(--base2);
+}
+.search-tab.active {
+    color: var(--cyan);
+    border-bottom-color: var(--cyan);
+    font-weight: 500;
+}
+
+/* ---- Similarity badge ---- */
+.similarity-badge {
+    display: inline-block;
+    padding: 0.1rem 0.45rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.similarity-high {
+    background-color: rgba(133, 153, 0, 0.18);  /* solarized green tint */
+    color: #859900;
+}
+.similarity-mid {
+    background-color: rgba(181, 137, 0, 0.18);  /* solarized yellow tint */
+    color: #b58900;
+}
+.similarity-low {
+    background-color: rgba(88, 110, 117, 0.18); /* solarized base01 tint */
+    color: var(--base1);
+}
+.col-similarity {
+    width: 6rem;
+    text-align: right;
+    white-space: nowrap;
+}
