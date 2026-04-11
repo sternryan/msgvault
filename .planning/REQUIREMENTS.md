@@ -66,28 +66,28 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EMBED-01 | — | Pending |
-| EMBED-02 | — | Pending |
-| EMBED-03 | — | Pending |
-| EMBED-04 | — | Pending |
-| EMBED-05 | — | Pending |
-| ENRICH-01 | — | Pending |
-| ENRICH-02 | — | Pending |
-| ENRICH-03 | — | Pending |
-| ENRICH-04 | — | Pending |
-| ENRICH-05 | — | Pending |
-| ENRICH-06 | — | Pending |
-| ENRICH-07 | — | Pending |
-| PIPE-01 | — | Pending |
-| PIPE-02 | — | Pending |
-| PIPE-03 | — | Pending |
-| PIPE-04 | — | Pending |
+| PIPE-01 | Phase 12 | Pending |
+| PIPE-02 | Phase 12 | Pending |
+| PIPE-03 | Phase 12 | Pending |
+| PIPE-04 | Phase 12 | Pending |
+| EMBED-01 | Phase 13 | Pending |
+| EMBED-02 | Phase 13 | Pending |
+| EMBED-03 | Phase 13 | Pending |
+| EMBED-04 | Phase 13 | Pending |
+| EMBED-05 | Phase 13 | Pending |
+| ENRICH-01 | Phase 14 | Pending |
+| ENRICH-02 | Phase 14 | Pending |
+| ENRICH-03 | Phase 14 | Pending |
+| ENRICH-04 | Phase 14 | Pending |
+| ENRICH-05 | Phase 14 | Pending |
+| ENRICH-06 | Phase 14 | Pending |
+| ENRICH-07 | Phase 14 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 16 total
-- Mapped to phases: 0
-- Unmapped: 16 ⚠️
+- Mapped to phases: 16
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-04-11*
-*Last updated: 2026-04-11 after initial definition*
+*Last updated: 2026-04-11 after roadmap creation*
