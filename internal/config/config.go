@@ -14,6 +14,45 @@ import (
 	"github.com/wesm/msgvault/internal/fileutil"
 )
 
+// AzureOpenAIConfig holds Azure OpenAI service configuration.
+type AzureOpenAIConfig struct {
+	Endpoint    string            `toml:"endpoint"`     // e.g. https://myinstance.openai.azure.com
+	APIKeyEnv   string            `toml:"api_key_env"`  // env var name (default: AZURE_OPENAI_API_KEY)
+	APIKeyFile  string            `toml:"api_key_file"` // path to file containing API key
+	Deployments map[string]string `toml:"deployments"`  // logical name -> deployment name
+	TPMLimit    int               `toml:"tpm_limit"`    // tokens per minute (0 = no limit)
+	RPMLimit    int               `toml:"rpm_limit"`    // requests per minute (0 = no limit)
+}
+
+// ResolveAPIKey returns the API key from env var or file.
+// Checks APIKeyEnv first (default "AZURE_OPENAI_API_KEY"), then APIKeyFile.
+func (a *AzureOpenAIConfig) ResolveAPIKey() (string, error) {
+	envName := a.APIKeyEnv
+	if envName == "" {
+		envName = "AZURE_OPENAI_API_KEY"
+	}
+	if key := os.Getenv(envName); key != "" {
+		return key, nil
+	}
+	if a.APIKeyFile != "" {
+		data, err := os.ReadFile(a.APIKeyFile)
+		if err != nil {
+			return "", fmt.Errorf("read API key file: %w", err)
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
+	return "", fmt.Errorf("Azure OpenAI API key not found: set %s env var or configure api_key_file", envName)
+}
+
+// DeploymentName returns the Azure deployment name for a logical model name.
+// Returns the logical name unchanged if no mapping is configured.
+func (a *AzureOpenAIConfig) DeploymentName(logical string) string {
+	if d, ok := a.Deployments[logical]; ok {
+		return d
+	}
+	return logical
+}
+
 // ChatConfig holds chat/LLM configuration.
 type ChatConfig struct {
 	Server     string `toml:"server"`      // Ollama server URL
@@ -70,15 +109,16 @@ type RemoteConfig struct {
 
 // Config represents the msgvault configuration.
 type Config struct {
-	Data       DataConfig        `toml:"data"`
-	OAuth      OAuthConfig       `toml:"oauth"`
-	Sync       SyncConfig        `toml:"sync"`
-	Encryption EncryptionConfig  `toml:"encryption"`
-	Microsoft  MicrosoftConfig   `toml:"microsoft"`
-	Chat       ChatConfig        `toml:"chat"`
-	Server     ServerConfig      `toml:"server"`
-	Remote     RemoteConfig      `toml:"remote"`
-	Accounts   []AccountSchedule `toml:"accounts"`
+	Data        DataConfig        `toml:"data"`
+	OAuth       OAuthConfig       `toml:"oauth"`
+	Sync        SyncConfig        `toml:"sync"`
+	Encryption  EncryptionConfig  `toml:"encryption"`
+	Microsoft   MicrosoftConfig   `toml:"microsoft"`
+	Chat        ChatConfig        `toml:"chat"`
+	AzureOpenAI AzureOpenAIConfig `toml:"azure_openai"`
+	Server      ServerConfig      `toml:"server"`
+	Remote      RemoteConfig      `toml:"remote"`
+	Accounts    []AccountSchedule `toml:"accounts"`
 
 	// Computed paths (not from config file)
 	HomeDir    string `toml:"-"`
@@ -262,6 +302,7 @@ func Load(path, homeDir string) (*Config, error) {
 		app.ClientSecrets = expandPath(app.ClientSecrets)
 		cfg.OAuth.Apps[name] = app
 	}
+	cfg.AzureOpenAI.APIKeyFile = expandPath(cfg.AzureOpenAI.APIKeyFile)
 
 	// When --config is used, resolve relative paths against the config file's
 	// directory so behavior doesn't depend on the working directory.
