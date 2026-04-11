@@ -12,8 +12,10 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
+	"github.com/wesm/msgvault/internal/ai"
 	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/query"
+	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/web/templates"
 )
 
@@ -21,6 +23,8 @@ type handlers struct {
 	engine         query.Engine
 	attachmentsDir string
 	deletions      *deletion.Manager
+	aiClient       *ai.Client   // nil if Azure not configured
+	store          *store.Store // for vector search; nil if not available
 	logger         *slog.Logger
 }
 

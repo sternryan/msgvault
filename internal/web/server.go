@@ -10,8 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/wesm/msgvault/internal/ai"
 	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/query"
+	"github.com/wesm/msgvault/internal/store"
 )
 
 // Server serves the web UI with server-rendered HTML.
@@ -20,16 +22,35 @@ type Server struct {
 	attachmentsDir string
 	deletions      *deletion.Manager
 	logger         *slog.Logger
+	aiClient       *ai.Client   // nil if Azure not configured
+	store          *store.Store // for vector search; nil if not available
 }
 
-// NewServer creates a new web server.
-func NewServer(engine query.Engine, attachmentsDir string, deletions *deletion.Manager, logger *slog.Logger) *Server {
-	return &Server{
+// ServerOption configures optional features on Server.
+type ServerOption func(*Server)
+
+// WithAI configures the server with an Azure OpenAI client and store for
+// semantic and hybrid search. Both must be non-nil.
+func WithAI(client *ai.Client, s *store.Store) ServerOption {
+	return func(srv *Server) {
+		srv.aiClient = client
+		srv.store = s
+	}
+}
+
+// NewServer creates a new web server. Optional features (e.g. AI search)
+// can be enabled via ServerOption arguments.
+func NewServer(engine query.Engine, attachmentsDir string, deletions *deletion.Manager, logger *slog.Logger, opts ...ServerOption) *Server {
+	srv := &Server{
 		engine:         engine,
 		attachmentsDir: attachmentsDir,
 		deletions:      deletions,
 		logger:         logger,
 	}
+	for _, opt := range opts {
+		opt(srv)
+	}
+	return srv
 }
 
 // buildRouter constructs and returns the chi router with all routes registered.
@@ -40,6 +61,8 @@ func (s *Server) buildRouter() chi.Router {
 		attachmentsDir: s.attachmentsDir,
 		deletions:      s.deletions,
 		logger:         s.logger,
+		aiClient:       s.aiClient,
+		store:          s.store,
 	}
 
 	r := chi.NewRouter()

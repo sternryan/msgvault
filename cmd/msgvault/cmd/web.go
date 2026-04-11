@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/wesm/msgvault/internal/ai"
 	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/web"
 )
@@ -66,7 +67,18 @@ Press Ctrl+C to stop the server.`,
 		// Launch CID backfill in background (non-blocking)
 		go web.BackfillContentIDs(store.DB(), webLogger)
 
-		srv := web.NewServer(engine, cfg.AttachmentsDir(), delMgr, webLogger)
+		// Wire AI client for semantic/hybrid search if Azure OpenAI is configured.
+		var webOpts []web.ServerOption
+		if cfg.AzureOpenAI.Endpoint != "" {
+			aiClient, aiErr := ai.NewClient(cfg.AzureOpenAI, ai.WithLogger(webLogger))
+			if aiErr != nil {
+				webLogger.Warn("AI client unavailable, semantic search disabled", "error", aiErr)
+			} else {
+				webOpts = append(webOpts, web.WithAI(aiClient, store))
+			}
+		}
+
+		srv := web.NewServer(engine, cfg.AttachmentsDir(), delMgr, webLogger, webOpts...)
 
 		addr := fmt.Sprintf("127.0.0.1:%d", webPort)
 		url := fmt.Sprintf("http://%s", addr)
