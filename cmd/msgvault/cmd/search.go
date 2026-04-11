@@ -8,16 +8,19 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wesm/msgvault/internal/ai"
+	"github.com/wesm/msgvault/internal/embedding"
 	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/search"
 	"github.com/wesm/msgvault/internal/store"
 )
 
 var (
-	searchLimit   int
-	searchOffset  int
-	searchJSON    bool
-	searchAccount string
+	searchLimit    int
+	searchOffset   int
+	searchJSON     bool
+	searchAccount  string
+	searchSemantic bool
 )
 
 var searchCmd = &cobra.Command{
@@ -57,6 +60,11 @@ Examples:
 
 		if queryStr == "" && searchAccount == "" {
 			return fmt.Errorf("provide a search query or --account flag")
+		}
+
+		// Semantic search: bypass FTS5/DuckDB and use vector similarity.
+		if searchSemantic {
+			return runSemanticSearch(cmd, queryStr)
 		}
 
 		// Use remote search if configured
@@ -231,12 +239,117 @@ func outputSearchResultsJSON(results []query.MessageSummary) error {
 	return printJSON(output)
 }
 
+// runSemanticSearch performs a vector similarity search against locally stored embeddings.
+func runSemanticSearch(cmd *cobra.Command, queryStr string) error {
+	if queryStr == "" {
+		return fmt.Errorf("provide a search query for semantic search")
+	}
+
+	// Validate: --semantic is incompatible with structured operators.
+	// A plain-text query has only TextTerms — no from:/to:/subject:/label:/etc.
+	q := search.Parse(queryStr)
+	if hasStructuredOperators(q) {
+		return fmt.Errorf("semantic search does not support structured operators; use plain text query")
+	}
+
+	if cfg.AzureOpenAI.Endpoint == "" {
+		return fmt.Errorf("azure_openai.endpoint not configured — semantic search requires Azure OpenAI\n\n" +
+			"Run 'msgvault embed' first to embed your messages, then configure:\n" +
+			"  [azure_openai]\n" +
+			"  endpoint = \"https://YOUR-INSTANCE.openai.azure.com\"")
+	}
+
+	dbPath := cfg.DatabaseDSN()
+	s, err := store.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer s.Close()
+
+	if err := s.InitSchema(); err != nil {
+		return fmt.Errorf("init schema: %w", err)
+	}
+
+	// Check that embeddings exist.
+	count, err := s.EmbeddingCount()
+	if err != nil {
+		return fmt.Errorf("check embeddings: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("no embeddings found — run 'msgvault embed' first")
+	}
+
+	aiClient, err := ai.NewClient(cfg.AzureOpenAI, ai.WithLogger(logger))
+	if err != nil {
+		return fmt.Errorf("create AI client: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Searching semantically...")
+
+	results, err := embedding.SemanticSearch(cmd.Context(), aiClient, s, queryStr, searchLimit)
+	fmt.Fprintf(os.Stderr, "\r                        \r")
+	if err != nil {
+		return fmt.Errorf("semantic search: %w", err)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No messages found.")
+		return nil
+	}
+
+	if searchJSON {
+		return outputSemanticResultsJSON(results)
+	}
+	return outputSemanticResultsTable(results)
+}
+
+func outputSemanticResultsTable(results []embedding.SemanticResult) error {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tDATE\tFROM\tSUBJECT\tSIMILARITY")
+	fmt.Fprintln(w, "──\t────\t────\t───────\t──────────")
+
+	for _, r := range results {
+		date := r.SentAt.Format("2006-01-02")
+		from := truncate(r.FromEmail, 30)
+		subject := truncate(r.Subject, 50)
+		similarity := fmt.Sprintf("%.1f%%", r.SimilarityPct)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", r.ID, date, from, subject, similarity)
+	}
+
+	w.Flush()
+	fmt.Printf("\nShowing %d results\n", len(results))
+	return nil
+}
+
+func outputSemanticResultsJSON(results []embedding.SemanticResult) error {
+	output := make([]map[string]interface{}, len(results))
+	for i, r := range results {
+		output[i] = map[string]interface{}{
+			"id":                     r.ID,
+			"source_message_id":      r.SourceMessageID,
+			"conversation_id":        r.ConversationID,
+			"source_conversation_id": r.SourceConversationID,
+			"subject":                r.Subject,
+			"snippet":                r.Snippet,
+			"from_email":             r.FromEmail,
+			"from_name":              r.FromName,
+			"sent_at":                r.SentAt.Format(time.RFC3339),
+			"size_estimate":          r.SizeEstimate,
+			"has_attachments":        r.HasAttachments,
+			"attachment_count":       r.AttachmentCount,
+			"similarity_pct":         r.SimilarityPct,
+		}
+	}
+	return printJSON(output)
+}
+
 func init() {
 	rootCmd.AddCommand(searchCmd)
 	searchCmd.Flags().IntVarP(&searchLimit, "limit", "n", 50, "Maximum number of results")
 	searchCmd.Flags().IntVar(&searchOffset, "offset", 0, "Skip first N results")
 	searchCmd.Flags().BoolVar(&searchJSON, "json", false, "Output as JSON")
 	searchCmd.Flags().StringVar(&searchAccount, "account", "", "Limit results to a specific account (email address)")
+	searchCmd.Flags().BoolVar(&searchSemantic, "semantic", false, "Use vector similarity search (requires msgvault embed to have been run)")
 }
 
 // ensureFTSIndex checks if the FTS search index needs to be built and
@@ -266,4 +379,21 @@ func ensureFTSIndex(s *store.Store) error {
 	}
 	fmt.Fprintf(os.Stderr, "\r  [%s] 100%%  %d messages indexed.\n", strings.Repeat("=", 30), n)
 	return nil
+}
+
+// hasStructuredOperators returns true if the query contains any structured
+// operator (from:, to:, subject:, label:, has:, before:, after:, etc.).
+// Semantic search only accepts plain-text queries.
+func hasStructuredOperators(q *search.Query) bool {
+	return len(q.FromAddrs) > 0 ||
+		len(q.ToAddrs) > 0 ||
+		len(q.CcAddrs) > 0 ||
+		len(q.BccAddrs) > 0 ||
+		len(q.SubjectTerms) > 0 ||
+		len(q.Labels) > 0 ||
+		q.HasAttachment != nil ||
+		q.BeforeDate != nil ||
+		q.AfterDate != nil ||
+		q.LargerThan != nil ||
+		q.SmallerThan != nil
 }

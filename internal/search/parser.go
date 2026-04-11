@@ -476,7 +476,7 @@ func (p *Parser) Parse(queryStr string) *Query {
 			}
 			if endQ >= 0 {
 				if afterColon {
-					qtoken := queryStr[start:endQ+1]
+					qtoken := queryStr[start : endQ+1]
 					qvalue := qtoken[colonRel+1:]
 					if len(qvalue) >= 2 && qvalue[0] == '"' && qvalue[len(qvalue)-1] == '"' {
 						qvalue = qvalue[1 : len(qvalue)-1]
