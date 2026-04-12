@@ -278,7 +278,20 @@ func (h *handlers) messagesList(w http.ResponseWriter, r *http.Request) {
 	// Build base URL preserving sort/filter params but NOT offset
 	baseURL := buildMessagesBaseURL(r)
 
-	content := templates.MessagesPage(messages, filter, total, baseURL)
+	// Fetch AI category labels for the category dropdown filter.
+	// Non-fatal: if store is unavailable or enrichment hasn't run, show empty dropdown.
+	var autoLabels []string
+	if h.store != nil {
+		labels, err := h.store.GetAutoLabels()
+		if err != nil {
+			h.logger.Error("failed to get auto labels for messages filter", "error", err)
+		} else {
+			autoLabels = labels
+		}
+	}
+	selectedCategory := r.URL.Query().Get("label")
+
+	content := templates.MessagesPage(messages, filter, total, baseURL, autoLabels, selectedCategory)
 	h.renderPage(w, r, "Messages", content)
 }
 
