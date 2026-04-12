@@ -76,6 +76,16 @@ templ Layout(title string, accounts []query.AccountInfo, activeAccountID *int64,
 						<span id="deletion-badge"></span>
 					}
 				</a>
+				<a
+					href="/entities"
+					class={ "nav-link", templ.KV("active", strings.HasPrefix(currentPath, "/entities")) }
+					hx-get="/entities"
+					hx-select="#main-content"
+					hx-target="#main-content"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+					hx-indicator="#page-indicator"
+				>Entities</a>
 				<span class="nav-spacer"></span>
 				<select
 					id="account-filter"
