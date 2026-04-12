@@ -1,5 +1,20 @@
 # Milestones: msgvault
 
+## v1.2 AI Archive Intelligence (Shipped: 2026-04-12)
+
+**Phases completed:** 3 phases, 7 plans, 15 tasks
+
+**Key accomplishments:**
+
+- Azure OpenAI client with dual TPM/RPM rate limiter, AzureOpenAIConfig in Config struct, and pipeline_runs/pipeline_checkpoints schema with Store CRUD methods
+- Generic batch processing framework with checkpoint resumability, live progress display (count/cost/tok-per-sec/ETA), graceful SIGINT shutdown, and a hidden 'pipeline test' CLI command for infrastructure validation
+- One-liner:
+- One-liner:
+- One-liner:
+- One-liner:
+
+---
+
 ## v1.1 Web UI Rebuild (Templ + HTMX) (Shipped: 2026-03-11)
 
 **Phases:** 6 (Phases 6-11) | **Plans:** 13 | **Tasks:** 27
@@ -9,6 +24,7 @@
 **Requirements:** 25/25 satisfied | **Audit:** Passed
 
 **Key accomplishments:**
+
 - Replaced React SPA with server-rendered Templ + HTMX — single `go build` binary, no npm/Node.js
 - HTML email rendering with bluemonday sanitization, sandboxed iframes, CID image substitution, external image blocking with opt-in toggle
 - Thread/conversation view with chronological messages, collapsible via `<details>`, lazy-load bodies, n/p/t keyboard navigation
@@ -27,6 +43,7 @@
 **Phases:** 1-5 (inferred from shipped features)
 
 **What shipped:**
+
 - Full/incremental Gmail sync with OAuth (browser + headless)
 - MIME parsing (subject, body, attachments, charset)
 - Parquet ETL pipeline (DuckDB-based, incremental)

@@ -27,18 +27,21 @@ Users can safely archive their entire Gmail history offline and search it instan
 - ✓ Loading Indicators: HTMX indicator on all 42 partial update trigger points — v1.1
 - ✓ CSS Bar Chart: Pure CSS time-series chart on dashboard — v1.1
 
-## Current Milestone: v1.2 AI Archive Intelligence
+### Validated (v1.2)
 
-**Goal:** Use $200 Azure credits (expiring ~2026-05-11) to add semantic search and AI-powered enrichment to the 472K-message archive.
+- ✓ Azure OpenAI batch pipeline with checkpoint resumability, rate limiting, progress display — v1.2
+- ✓ Semantic embeddings via text-embedding-3-small stored in sqlite-vec — v1.2
+- ✓ Semantic and hybrid (RRF) search in CLI and web UI — v1.2
+- ✓ AI categorization (8 categories) via GPT-4o-mini as auto-labels — v1.2
+- ✓ Life event extraction with LifeVault-compatible JSON export — v1.2
+- ✓ Entity extraction (person/company/date/amount) with searchable web page — v1.2
+- ✓ TUI AI Categories view and web category dropdown filter — v1.2
 
-**Target features:**
-- Semantic embeddings for the entire archive via Azure OpenAI text-embedding-3-small
-- Vector search via sqlite-vec for semantic queries beyond FTS5
-- Life timeline extraction — classify emails for life events and export to LifeVault-compatible format
-- Smart categorization — finance, travel, legal, health, shopping labels across all 6 accounts
-- Go batch pipeline with Azure OpenAI SDK, progress tracking, resumability
+## Current State
 
-### Active
+**v1.2 AI Archive Intelligence shipped 2026-04-12.** All 16 requirements delivered across 3 phases (7 plans).
+
+Next milestone not yet planned. Candidates: relationship intelligence (v1.3), encryption at rest, Microsoft 365 connector.
 
 ### Out of Scope
 
@@ -83,6 +86,11 @@ Users can safely archive their entire Gmail history offline and search it instan
 | HTMX outerHTML swap for image toggle | No JS iframe src mutation needed | ✓ Good — clean HTMX pattern |
 | CSS-only bar chart | No JS charting library dependency | ✓ Good — simple, effective |
 | Universal #page-indicator | Persistent across #main-content swaps | ✓ Good — simpler than per-trigger |
+| Azure OpenAI batch pipeline | Checkpoint resumability for 472K messages | ✓ Good — survived interruptions cleanly |
+| sqlite-vec for embeddings | Single-file vector search, same SQLite connection | ✓ Good — no external vector DB needed |
+| Combined LLM call (category+events+entities) | Halves API cost vs separate pipelines | ✓ Good — $0.15/M shared across tasks |
+| Auto-labels (label_type='auto') | Reuses all existing label UI/filtering code | ✓ Good — zero new query logic for TUI/web |
+| RRF hybrid search (k=60) | Simple, proven re-ranking without tuning | ✓ Good — standard approach |
 
 ---
 ## Evolution
@@ -103,4 +111,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-11 after v1.2 milestone start*
+*Last updated: 2026-04-12 after v1.2 milestone completion*
