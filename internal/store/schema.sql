@@ -409,6 +409,43 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_runs_type_status ON pipeline_runs(pipeli
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started ON pipeline_runs(started_at DESC);
 
 -- ============================================================================
+-- AI ENRICHMENT OUTPUTS
+-- ============================================================================
+
+-- Life events extracted by AI pipeline
+CREATE TABLE IF NOT EXISTS life_events (
+    id INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    event_date TEXT,
+    event_type TEXT NOT NULL,
+    description TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_life_events_message ON life_events(message_id);
+CREATE INDEX IF NOT EXISTS idx_life_events_type ON life_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_life_events_date ON life_events(event_date);
+
+-- Entities extracted by AI pipeline
+CREATE TABLE IF NOT EXISTS entities (
+    id INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    entity_type TEXT NOT NULL,
+    value TEXT NOT NULL,
+    normalized_value TEXT,
+    context TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_entities_message ON entities(message_id);
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
+CREATE INDEX IF NOT EXISTS idx_entities_value ON entities(value);
+CREATE INDEX IF NOT EXISTS idx_entities_normalized ON entities(normalized_value) WHERE normalized_value IS NOT NULL;
+
+-- Partial unique index to prevent duplicate auto labels (SQLite NULL != NULL in UNIQUE)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_labels_auto_name ON labels(name) WHERE source_id IS NULL AND label_type = 'auto';
+
+-- ============================================================================
 -- VECTOR SEARCH (sqlite-vec)
 -- ============================================================================
 -- vec_messages is created programmatically via InitVectorTable()
