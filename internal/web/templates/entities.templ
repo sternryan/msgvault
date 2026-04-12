@@ -1,0 +1,188 @@
+package templates
+
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/wesm/msgvault/internal/store"
+)
+
+// entityTypeLabel returns a human-readable label for an entity type.
+func entityTypeLabel(entityType string) string {
+	switch entityType {
+	case "person":
+		return "Person"
+	case "company":
+		return "Company"
+	case "date":
+		return "Date"
+	case "amount":
+		return "Amount"
+	default:
+		return entityType
+	}
+}
+
+// entityTypeClass returns a CSS class suffix for entity type badge coloring.
+func entityTypeClass(entityType string) string {
+	switch entityType {
+	case "person":
+		return "entity-badge--person"
+	case "company":
+		return "entity-badge--company"
+	case "date":
+		return "entity-badge--date"
+	case "amount":
+		return "entity-badge--amount"
+	default:
+		return "entity-badge--other"
+	}
+}
+
+// entitiesBaseURL builds a base URL for the entities partial, preserving type and q params.
+func entitiesBaseURL(entityType, q string) string {
+	u := &url.URL{Path: "/entities/partial"}
+	params := url.Values{}
+	if entityType != "" {
+		params.Set("type", entityType)
+	}
+	if q != "" {
+		params.Set("q", q)
+	}
+	u.RawQuery = params.Encode()
+	return u.String()
+}
+
+// EntitiesPage renders the full entities page with type filter, search, and paginated table.
+templ EntitiesPage(entities []store.EntityRow, entityType, q string, offset, limit int, total int64) {
+	<div class="page-content" id="main-content">
+		<div class="page-header">
+			<h2 class="page-title">Entities</h2>
+		</div>
+		<!-- Filter bar -->
+		<div class="filter-bar entities-filter-bar">
+			<select
+				name="type"
+				class="filter-select"
+				hx-get="/entities/partial"
+				hx-target="#entities-table"
+				hx-swap="innerHTML"
+				hx-include="[name='q']"
+				hx-indicator="#filter-indicator"
+				hx-trigger="change"
+			>
+				<option value="" selected?={ entityType == "" }>All types</option>
+				<option value="person" selected?={ entityType == "person" }>Person</option>
+				<option value="company" selected?={ entityType == "company" }>Company</option>
+				<option value="date" selected?={ entityType == "date" }>Date</option>
+				<option value="amount" selected?={ entityType == "amount" }>Amount</option>
+			</select>
+			<input
+				type="text"
+				name="q"
+				value={ q }
+				placeholder="Search entities..."
+				class="filter-input"
+				hx-get="/entities/partial"
+				hx-target="#entities-table"
+				hx-swap="innerHTML"
+				hx-trigger="keyup changed delay:300ms"
+				hx-include="[name='type']"
+				hx-indicator="#filter-indicator"
+			/>
+			<span id="filter-indicator" class="htmx-indicator">Filtering...</span>
+		</div>
+		<!-- Table container (HTMX target) -->
+		<div id="entities-table">
+			@EntitiesTableContent(entities, entityType, q, offset, limit, total)
+		</div>
+	</div>
+}
+
+// EntitiesTableContent renders the table body + pagination — used as the HTMX partial target.
+templ EntitiesTableContent(entities []store.EntityRow, entityType, q string, offset, limit int, total int64) {
+	if len(entities) == 0 {
+		<div class="empty-state">
+			<p>No entities found.</p>
+		</div>
+	} else {
+		<div class="table-meta">
+			Showing { fmt.Sprintf("%d", offset+1) }–{ fmt.Sprintf("%d", minInt64(int64(offset+limit), total)) } of { FormatNum(total) } entities
+		</div>
+		<table class="data-table entities-table">
+			<thead>
+				<tr>
+					<th>Type</th>
+					<th>Value</th>
+					<th>Normalized</th>
+					<th>Context</th>
+					<th>Messages</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, e := range entities {
+					<tr>
+						<td class="col-type">
+							<span class={ "entity-badge", entityTypeClass(e.EntityType) }>{ entityTypeLabel(e.EntityType) }</span>
+						</td>
+						<td class="col-value" title={ e.Value }>{ truncateStr(e.Value, 60) }</td>
+						<td class="col-normalized" title={ e.NormalizedValue }>{ truncateStr(e.NormalizedValue, 40) }</td>
+						<td class="col-context" title={ e.Context }>{ truncateStr(e.Context, 60) }</td>
+						<td class="col-messages">
+							<a
+								href={ templ.SafeURL(fmt.Sprintf("/search?q=%s", url.QueryEscape(e.Value))) }
+								hx-get={ fmt.Sprintf("/search?q=%s", url.QueryEscape(e.Value)) }
+								hx-select="#main-content"
+								hx-target="#main-content"
+								hx-swap="outerHTML"
+								hx-push-url="true"
+								hx-indicator="#page-indicator"
+								class="search-link"
+							>Search</a>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		@EntitiesPagination(entitiesBaseURL(entityType, q), offset, limit, total)
+	}
+}
+
+// EntitiesPagination renders prev/next pagination for the entities table.
+templ EntitiesPagination(baseURL string, offset, limit int, total int64) {
+	<div class="pagination">
+		<span class="pagination-info">
+			if total == 0 {
+				No entities
+			} else {
+				{ fmt.Sprintf("%d", offset+1) }–{ fmt.Sprintf("%d", minInt64(int64(offset+limit), total)) } of { FormatNum(total) } entities
+			}
+		</span>
+		<div class="pagination-nav">
+			if offset > 0 {
+				<a
+					class="pagination-link"
+					hx-get={ paginationURL(baseURL, offset-limit, limit) }
+					hx-target="#entities-table"
+					hx-swap="innerHTML"
+					hx-indicator="#page-indicator"
+					href={ templ.SafeURL(paginationURL(baseURL, offset-limit, limit)) }
+				>&larr; Prev</a>
+			} else {
+				<span class="pagination-link pagination-link--disabled">&larr; Prev</span>
+			}
+			if int64(offset+limit) < total {
+				<a
+					class="pagination-link"
+					hx-get={ paginationURL(baseURL, offset+limit, limit) }
+					hx-target="#entities-table"
+					hx-swap="innerHTML"
+					hx-indicator="#page-indicator"
+					href={ templ.SafeURL(paginationURL(baseURL, offset+limit, limit)) }
+				>Next &rarr;</a>
+			} else {
+				<span class="pagination-link pagination-link--disabled">Next &rarr;</span>
+			}
+		</div>
+	</div>
+}

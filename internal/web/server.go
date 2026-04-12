@@ -87,6 +87,8 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/deletions", h.deletionsPage)
 	r.Post("/deletions/stage", h.stageDeletion)
 	r.Delete("/deletions/{id}", h.cancelDeletion)
+	r.Get("/entities", h.entitiesPage)
+	r.Get("/entities/partial", h.entitiesPartial)
 	r.Get("/attachments/{id}/download", h.downloadAttachment)
 	r.Get("/attachments/{id}/inline", h.inlineAttachment)
 	r.Get("/threads/{conversationId}", h.threadView)
