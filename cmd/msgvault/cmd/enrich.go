@@ -88,7 +88,7 @@ func runEnrich(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Starting enrichment pipeline (batch-size=%d, deployment=%s)...\n",
 		enrichBatchSize, enrichDeployment)
 
-	if err := enrichment.RunEnrichPipeline(cmd.Context(), aiClient, s, slogLogger, enrichBatchSize); err != nil {
+	if err := enrichment.RunEnrichPipeline(cmd.Context(), aiClient, s, slogLogger, enrichBatchSize, enrichDeployment); err != nil {
 		return fmt.Errorf("enrichment pipeline: %w", err)
 	}
 

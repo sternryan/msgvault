@@ -203,12 +203,15 @@ func writeEnrichResults(s *store.Store, messageID int64, result *EnrichResult) e
 
 // RunEnrichPipeline runs the full enrichment pipeline for all uncategorized messages.
 // Uses the Phase 12 BatchRunner for resumability and checkpoint-based recovery.
-func RunEnrichPipeline(ctx context.Context, client *ai.Client, s *store.Store, logger *slog.Logger, batchSize int) error {
+func RunEnrichPipeline(ctx context.Context, client *ai.Client, s *store.Store, logger *slog.Logger, batchSize int, deployment string) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if batchSize <= 0 {
 		batchSize = 20
+	}
+	if deployment == "" {
+		deployment = "chat"
 	}
 
 	runner := ai.NewBatchRunner(ai.RunConfig{
@@ -218,7 +221,7 @@ func RunEnrichPipeline(ctx context.Context, client *ai.Client, s *store.Store, l
 		Store:           s,
 		Logger:          logger,
 		QueryMessages:   createEnrichQueryFunc(s),
-		Process:         buildEnrichProcessFunc(client, s, "chat", logger),
+		Process:         buildEnrichProcessFunc(client, s, deployment, logger),
 	})
 
 	return runner.Run(ctx)
