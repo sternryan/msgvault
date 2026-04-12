@@ -71,8 +71,11 @@ Plans:
   2. TUI and web UI both expose an AI category filter so users can view only messages in a given category
   3. Life events (jobs, moves, purchases, travel, milestones) are extracted and exportable as a LifeVault-compatible JSON file with date, type, description, and source_message_id
   4. Entities (people, companies, dates, amounts) are stored in a searchable table with back-references to source messages
-**UI hint**: yes
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 14-01-PLAN.md — Schema, store methods, enrichment pipeline, and enrich CLI command
+- [ ] 14-02-PLAN.md — Export-timeline CLI and Entities web page
+- [ ] 14-03-PLAN.md — TUI AI Categories view and web category dropdown filter
 
 ## Progress
 
@@ -82,4 +85,4 @@ Plans:
 | 6-11 | v1.1 | 13/13 | Complete | 2026-03-11 |
 | 12. Pipeline Infrastructure | v1.2 | 2/2 | Complete    | 2026-04-11 |
 | 13. Embeddings & Vector Search | v1.2 | 2/2 | Complete    | 2026-04-11 |
-| 14. AI Enrichment & UI Integration | v1.2 | 0/TBD | Not started | - |
+| 14. AI Enrichment & UI Integration | v1.2 | 0/3 | In progress | - |
