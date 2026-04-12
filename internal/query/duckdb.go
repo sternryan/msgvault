@@ -655,7 +655,14 @@ func (e *DuckDBEngine) aggregateByView(ctx context.Context, view ViewType, opts 
 }
 
 // Aggregate performs grouping based on the provided ViewType.
+// ViewAICategories falls back to the SQLite engine because the Parquet labels
+// table does not include label_type, so filtering by label_type = 'auto'
+// requires the SQLite store. AI category counts are always small (≤8 rows),
+// so SQLite performance is acceptable.
 func (e *DuckDBEngine) Aggregate(ctx context.Context, groupBy ViewType, opts AggregateOptions) ([]AggregateRow, error) {
+	if groupBy == ViewAICategories && e.sqliteEngine != nil {
+		return e.sqliteEngine.Aggregate(ctx, groupBy, opts)
+	}
 	return e.aggregateByView(ctx, groupBy, opts)
 }
 
@@ -830,7 +837,11 @@ func inferTimeGranularity(base TimeGranularity, period string) TimeGranularity {
 
 // SubAggregate performs aggregation on a filtered subset of messages.
 // This is used for sub-grouping after drill-down.
+// ViewAICategories falls back to the SQLite engine (same reason as Aggregate).
 func (e *DuckDBEngine) SubAggregate(ctx context.Context, filter MessageFilter, groupBy ViewType, opts AggregateOptions) ([]AggregateRow, error) {
+	if groupBy == ViewAICategories && e.sqliteEngine != nil {
+		return e.sqliteEngine.SubAggregate(ctx, filter, groupBy, opts)
+	}
 	def, err := getViewDef(groupBy, opts.TimeGranularity, "agg")
 	if err != nil {
 		return nil, err

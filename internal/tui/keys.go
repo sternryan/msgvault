@@ -286,6 +286,8 @@ func (m Model) nextSubGroupView(current query.ViewType) query.ViewType {
 	case query.ViewDomains:
 		return query.ViewLabels
 	case query.ViewLabels:
+		return query.ViewAICategories
+	case query.ViewAICategories:
 		return query.ViewTime
 	case query.ViewTime:
 		return query.ViewSenders
@@ -1155,6 +1157,11 @@ func (m *Model) setDrillFilterForView(key string) {
 		m.drillFilter.Label = key
 		if key == "" {
 			m.drillFilter.SetEmptyTarget(query.ViewLabels)
+		}
+	case query.ViewAICategories:
+		m.drillFilter.Label = key
+		if key == "" {
+			m.drillFilter.SetEmptyTarget(query.ViewAICategories)
 		}
 	case query.ViewTime:
 		m.drillFilter.TimeRange.Period = key
