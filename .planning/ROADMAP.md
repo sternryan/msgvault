@@ -30,7 +30,7 @@ See: `milestones/v1.1-ROADMAP.md` for full phase details.
 
 - [x] **Phase 12: Pipeline Infrastructure** - Azure OpenAI client, config, rate limiting, checkpointed batch runner (completed 2026-04-11)
 - [x] **Phase 13: Embeddings & Vector Search** - Embed all messages, sqlite-vec storage, CLI + web semantic search, hybrid re-ranking (completed 2026-04-11)
-- [ ] **Phase 14: AI Enrichment & UI Integration** - Categorization, life events, entity extraction, label storage, TUI/web filters
+- [x] **Phase 14: AI Enrichment & UI Integration** - Categorization, life events, entity extraction, label storage, TUI/web filters (completed 2026-04-12)
 
 ## Phase Details
 
@@ -71,11 +71,11 @@ Plans:
   2. TUI and web UI both expose an AI category filter so users can view only messages in a given category
   3. Life events (jobs, moves, purchases, travel, milestones) are extracted and exportable as a LifeVault-compatible JSON file with date, type, description, and source_message_id
   4. Entities (people, companies, dates, amounts) are stored in a searchable table with back-references to source messages
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 Plans:
-- [ ] 14-01-PLAN.md — Schema, store methods, enrichment pipeline, and enrich CLI command
-- [ ] 14-02-PLAN.md — Export-timeline CLI and Entities web page
-- [ ] 14-03-PLAN.md — TUI AI Categories view and web category dropdown filter
+- [x] 14-01-PLAN.md — Schema, store methods, enrichment pipeline, and enrich CLI command
+- [x] 14-02-PLAN.md — Export-timeline CLI and Entities web page
+- [x] 14-03-PLAN.md — TUI AI Categories view and web category dropdown filter
 
 ## Progress
 
@@ -85,4 +85,4 @@ Plans:
 | 6-11 | v1.1 | 13/13 | Complete | 2026-03-11 |
 | 12. Pipeline Infrastructure | v1.2 | 2/2 | Complete    | 2026-04-11 |
 | 13. Embeddings & Vector Search | v1.2 | 2/2 | Complete    | 2026-04-11 |
-| 14. AI Enrichment & UI Integration | v1.2 | 0/3 | In progress | - |
+| 14. AI Enrichment & UI Integration | v1.2 | 3/3 | Complete    | 2026-04-12 |
