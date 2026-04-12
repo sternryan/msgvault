@@ -2,14 +2,35 @@ package templates
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/wesm/msgvault/internal/query"
 )
 
 // MessagesPage renders the paginated message list with sortable column headers.
-templ MessagesPage(messages []query.MessageSummary, filter query.MessageFilter, total int64, baseURL string) {
+templ MessagesPage(messages []query.MessageSummary, filter query.MessageFilter, total int64, baseURL string, autoLabels []string, selectedCategory string) {
 	<div class="page-content">
 		<div class="page-header">
 			<h2 class="page-title">Messages</h2>
+			if len(autoLabels) > 0 {
+				<div class="filter-bar">
+					<select
+						name="label"
+						hx-get="/messages"
+						hx-target="#main-content"
+						hx-swap="outerHTML"
+						hx-replace-url="true"
+						hx-indicator="#page-indicator"
+						hx-include="[name]"
+						class="filter-select"
+					>
+						<option value="">All Categories</option>
+						for _, label := range autoLabels {
+							<option value={ label } selected?={ label == selectedCategory }>{ strings.Title(label) }</option>
+						}
+					</select>
+				</div>
+			}
 		</div>
 		if len(messages) == 0 && total == 0 {
 			<div class="empty-state">
