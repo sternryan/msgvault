@@ -1,5 +1,19 @@
 # Worklog
 
+**Session 2026-04-12 — msgvault: v1.2 Phase 14 + Milestone Complete**
+
+- Phase 14 (AI Enrichment & UI Integration): autonomous discuss→plan→execute for 3 plans in 2 waves
+- Plan 14-01 (Wave 1): enrichment schema (life_events, entities tables, auto-label partial unique index), 8 store methods with 10 tests, GPT-4o-mini pipeline via BatchRunner, `msgvault enrich` CLI — 7 files
+- Plan 14-02 (Wave 2): `msgvault export-timeline` CLI for LifeVault JSON, `/entities` web page with type filter/search/HTMX partials — 5 files
+- Plan 14-03 (Wave 2): ViewAICategories in TUI Tab-cycle, web messages page category dropdown — 9 files
+- Code review: 2 warnings fixed inline (deployment flag threading, LIKE wildcard escaping), test regression caught (TUI view cycle)
+- Verification: 4/4 automated must-haves passed, 3 visual items deferred for manual testing
+- Milestone lifecycle: audit (16/16 reqs, 22/22 integrations, 4/4 E2E flows) → complete → archive → tag v1.2
+- Deployed to Mac Mini: clean build required (stale cache missed new commands), both `enrich` and `export-timeline` confirmed working
+- 18 commits, 24 source files changed, +2,518/-77 lines
+- v1.2 tag pushed to origin
+- Carryover: Azure OpenAI config on Mac Mini needed before running enrichment, 3 human verification items (TUI/web visual checks)
+
 **Session 2026-04-11 — msgvault: v1.2 AI Archive Intelligence (Phases 12-13)**
 
 - Carryover from Outlook import: committed merge script, gitignored local data dirs, committed Azure client_id in config.toml
