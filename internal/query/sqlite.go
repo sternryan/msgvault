@@ -142,6 +142,13 @@ func aggDimensionForView(view ViewType, timeGranularity TimeGranularity) (aggDim
 				JOIN labels l ON l.id = ml.label_id`,
 			whereExpr: "",
 		}, nil
+	case ViewAICategories:
+		return aggDimension{
+			keyExpr: "l.name",
+			joins: `JOIN message_labels ml ON ml.message_id = m.id
+				JOIN labels l ON l.id = ml.label_id`,
+			whereExpr: "l.label_type = 'auto'",
+		}, nil
 	case ViewTime:
 		var timeExpr string
 		switch timeGranularity {
@@ -493,11 +500,11 @@ func (e *SQLiteEngine) buildAggregateSearchParts(
 	var conditions []string
 	var args []interface{}
 
-	// For Labels view with label search, filter the grouping
+	// For Labels and AICategories views with label search, filter the grouping
 	// column (l.name) directly instead of adding a conflicting
 	// label join. Strip labels from the parsed query before
 	// building the generic parts.
-	if groupBy == ViewLabels && len(q.Labels) > 0 {
+	if (groupBy == ViewLabels || groupBy == ViewAICategories) && len(q.Labels) > 0 {
 		var labelParts []string
 		for _, label := range q.Labels {
 			labelParts = append(labelParts,

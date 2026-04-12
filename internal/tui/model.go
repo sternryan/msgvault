@@ -565,6 +565,11 @@ func (m Model) buildMessageFilter() query.MessageFilter {
 			if m.filterKey == "" {
 				filter.SetEmptyTarget(query.ViewLabels)
 			}
+		case query.ViewAICategories:
+			filter.Label = m.filterKey
+			if m.filterKey == "" {
+				filter.SetEmptyTarget(query.ViewAICategories)
+			}
 		case query.ViewTime:
 			filter.TimeRange.Period = m.filterKey
 			filter.TimeRange.Granularity = m.timeGranularity
@@ -627,6 +632,8 @@ func (m Model) drillFilterKey() string {
 	case query.ViewDomains:
 		return m.drillFilter.Domain
 	case query.ViewLabels:
+		return m.drillFilter.Label
+	case query.ViewAICategories:
 		return m.drillFilter.Label
 	case query.ViewTime:
 		return m.drillFilter.TimeRange.Period

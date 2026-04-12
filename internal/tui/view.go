@@ -110,6 +110,8 @@ func viewTypeAbbrev(vt query.ViewType) string {
 		return "Label"
 	case query.ViewTime:
 		return "Time"
+	case query.ViewAICategories:
+		return "AI Category"
 	default:
 		return vt.String()
 	}
@@ -132,6 +134,8 @@ func viewTypePrefix(vt query.ViewType) string {
 		return "L"
 	case query.ViewTime:
 		return "T"
+	case query.ViewAICategories:
+		return "AI"
 	default:
 		s := vt.String()
 		if len(s) > 0 {
