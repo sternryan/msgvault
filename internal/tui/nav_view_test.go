@@ -58,6 +58,7 @@ func TestGKeyCyclesViewTypeFullCycle(t *testing.T) {
 		query.ViewDomains,
 		query.ViewLabels,
 		query.ViewTime,
+		query.ViewAICategories,
 		query.ViewSenders, // Cycles back
 	}
 

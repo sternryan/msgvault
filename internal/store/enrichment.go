@@ -225,8 +225,9 @@ func (s *Store) GetEntities(entityType, searchQuery string, limit, offset int) (
 		args = append(args, entityType)
 	}
 	if searchQuery != "" {
-		conditions = append(conditions, "(value LIKE ? OR normalized_value LIKE ?)")
-		like := "%" + searchQuery + "%"
+		conditions = append(conditions, "(value LIKE ? ESCAPE '\\' OR normalized_value LIKE ? ESCAPE '\\')")
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(searchQuery)
+		like := "%" + escaped + "%"
 		args = append(args, like, like)
 	}
 
