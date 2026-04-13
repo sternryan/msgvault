@@ -24,6 +24,7 @@ Currently supports Gmail, Microsoft 365 / Outlook.com, and IMAP sync, plus offli
 - **IMAP sync**: archive mail from any standard IMAP server
 - **MBOX / Apple Mail import**: import email from MBOX exports or Apple Mail (.emlx) directories
 - **Interactive TUI**: drill-down analytics over your entire message history, powered by DuckDB over Parquet — connects to a remote `msgvault serve` instance or runs locally
+- **Web UI**: React SPA in `web/` — Dashboard, Messages, Aggregate, Search, Deletions, Thread, and Message detail views, served by the Go binary via embed
 - **Full-text search**: FTS5 with Gmail-like query syntax (`from:`, `has:attachment`, date ranges)
 - **MCP server**: access your full archive at the speed of thought in Claude Desktop and other MCP-capable AI agents
 - **DuckDB analytics**: millisecond aggregate queries across hundreds of thousands of messages in the TUI, CLI, and MCP server
