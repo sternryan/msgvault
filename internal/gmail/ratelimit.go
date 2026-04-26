@@ -25,6 +25,7 @@ const (
 	OpMessagesDelete                       // 10 units
 	OpMessagesBatchDelete                  // 50 units
 	OpProfile                              // 1 unit
+	OpMessagesSend                         // 100 units (Gmail quota cost)
 )
 
 // Cost returns the quota cost for an operation.
@@ -36,6 +37,8 @@ func (o Operation) Cost() int {
 		return 10
 	case OpMessagesBatchDelete:
 		return 50
+	case OpMessagesSend:
+		return 100
 	case OpHistoryList:
 		return 2
 	default:

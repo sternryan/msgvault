@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.msgvault.triage</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/services/msgvault/run-triage.sh</string>
+    </array>
+
+    <!-- Weekly: every Monday at 07:00 local time. TZ pinned via
+         EnvironmentVariables below; do NOT rely on macOS system TZ. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/opt/services/msgvault/logs/triage.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/opt/services/msgvault/logs/triage.err.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/opt/services/msgvault</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TZ</key>
+        <string>America/Los_Angeles</string>
+        <key>HOME</key>
+        <string>/Users/ryanstern</string>
+    </dict>
+
+    <!-- Mandatory per project_mac_mini_launchd_gotchas.md: services
+         without ThrottleInterval hot-loop on cold boot. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- IMPORTANT: the Process-Type key is intentionally absent.
+         Setting it (especially to "Background") deprioritizes the job
+         and eventually kills it. See project_mac_mini_launchd_gotchas.md. -->
+</dict>
+</plist>
