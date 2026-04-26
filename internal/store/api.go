@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/wesm/msgvault/internal/search"
 )
 
 // APIMessage represents a message for API responses.
@@ -14,6 +16,8 @@ type APIMessage struct {
 	Subject        string
 	From           string
 	To             []string
+	Cc             []string
+	Bcc            []string
 	SentAt         time.Time
 	Snippet        string
 	Labels         []string
@@ -64,7 +68,7 @@ func (s *Store) ListMessages(offset, limit int) ([]APIMessage, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// Use scanMessageRows for robust date parsing
 	messages, ids, err := scanMessageRows(rows)
@@ -76,21 +80,9 @@ func (s *Store) ListMessages(offset, limit int) ([]APIMessage, int64, error) {
 		return messages, total, nil
 	}
 
-	// Batch-load recipients for all messages
-	recipientMap, err := s.batchGetRecipients(ids, "to")
-	if err != nil {
+	// Batch-load recipients and labels for all messages
+	if err := s.batchPopulate(messages, ids); err != nil {
 		return nil, 0, err
-	}
-
-	// Batch-load labels for all messages
-	labelMap, err := s.batchGetLabels(ids)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	for i := range messages {
-		messages[i].To = recipientMap[messages[i].ID]
-		messages[i].Labels = labelMap[messages[i].ID]
 	}
 
 	return messages, total, nil
@@ -139,6 +131,14 @@ func (s *Store) GetMessage(id int64) (*APIMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.Cc, err = s.getRecipients(m.ID, "cc")
+	if err != nil {
+		return nil, err
+	}
+	m.Bcc, err = s.getRecipients(m.ID, "bcc")
+	if err != nil {
+		return nil, err
+	}
 
 	// Get labels (single message, per-row is fine)
 	m.Labels, err = s.getLabels(m.ID)
@@ -161,7 +161,7 @@ func (s *Store) GetMessage(id int64) (*APIMessage, error) {
 	// Get attachments
 	attRows, err := s.db.Query("SELECT filename, mime_type, size FROM attachments WHERE message_id = ?", id)
 	if err == nil {
-		defer attRows.Close()
+		defer func() { _ = attRows.Close() }()
 		for attRows.Next() {
 			var att APIAttachment
 			if err := attRows.Scan(&att.Filename, &att.MimeType, &att.Size); err == nil {
@@ -175,10 +175,29 @@ func (s *Store) GetMessage(id int64) (*APIMessage, error) {
 	return &m, nil
 }
 
-// SearchMessages searches messages using FTS5, with batch-loaded recipients and labels.
-func (s *Store) SearchMessages(query string, offset, limit int) ([]APIMessage, int64, error) {
-	// First try FTS5 search
-	ftsQuery := `
+// GetMessagesSummariesByIDs returns summary-level (no body, no
+// attachments) APIMessage rows for the supplied IDs in the same order
+// as ids. Missing IDs are silently dropped — callers are expected to
+// have already filtered for live messages, and a missing row in the
+// summary set is just "ignore this hit". Recipients and labels are
+// batch-loaded with the same shape as SearchMessages, so the worst
+// case is 5 SQL round-trips regardless of len(ids). This is the
+// designated hydration path for vector/hybrid search hits, where
+// callers loop over many MessageIDs and never need body or
+// attachments — calling GetMessage in that loop costs ~7 queries per
+// hit (body + attachments + 3 recipients + labels + base) and
+// dominates p50 search latency past a handful of results.
+func (s *Store) GetMessagesSummariesByIDs(ids []int64) ([]APIMessage, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := fmt.Sprintf(`
 		SELECT
 			m.id,
 			COALESCE(m.conversation_id, 0) as conversation_id,
@@ -188,21 +207,81 @@ func (s *Store) SearchMessages(query string, offset, limit int) ([]APIMessage, i
 			COALESCE(m.snippet, '') as snippet,
 			m.has_attachments,
 			m.size_estimate
-		FROM messages_fts fts
-		JOIN messages m ON m.id = fts.rowid
+		FROM messages m
 		LEFT JOIN message_recipients mr ON mr.message_id = m.id AND mr.recipient_type = 'from'
 		LEFT JOIN participants p ON p.id = mr.participant_id
-		WHERE messages_fts MATCH ? AND m.deleted_from_source_at IS NULL
-		ORDER BY rank
-		LIMIT ? OFFSET ?
-	`
-
-	rows, err := s.db.Query(ftsQuery, query, limit, offset)
+		WHERE m.id IN (%s) AND m.deleted_from_source_at IS NULL
+	`, strings.Join(placeholders, ","))
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
-		// FTS5 might not be available, fall back to LIKE search
+		return nil, fmt.Errorf("get message summaries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	messages, foundIDs, err := scanMessageRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	if err := s.batchPopulate(messages, foundIDs); err != nil {
+		return nil, err
+	}
+
+	// Re-order to match the caller's id order so search rank is
+	// preserved end-to-end.
+	indexByID := make(map[int64]int, len(messages))
+	for i, m := range messages {
+		indexByID[m.ID] = i
+	}
+	ordered := make([]APIMessage, 0, len(ids))
+	for _, id := range ids {
+		if idx, ok := indexByID[id]; ok {
+			ordered = append(ordered, messages[idx])
+		}
+	}
+	return ordered, nil
+}
+
+// SearchMessages searches messages using full-text search, with batch-loaded recipients and labels.
+func (s *Store) SearchMessages(query string, offset, limit int) ([]APIMessage, int64, error) {
+	ftsJoin, ftsWhere, ftsOrder, orderArgCount := s.dialect.FTSSearchClause()
+
+	ftsQuery := fmt.Sprintf(`
+		SELECT
+			m.id,
+			COALESCE(m.conversation_id, 0) as conversation_id,
+			COALESCE(m.subject, '') as subject,
+			COALESCE(p.email_address, '') as from_email,
+			COALESCE(m.sent_at, m.received_at, m.internal_date) as sent_at,
+			COALESCE(m.snippet, '') as snippet,
+			m.has_attachments,
+			m.size_estimate
+		FROM messages m
+		%s
+		LEFT JOIN message_recipients mr ON mr.message_id = m.id AND mr.recipient_type = 'from'
+		LEFT JOIN participants p ON p.id = mr.participant_id
+		WHERE %s AND m.deleted_from_source_at IS NULL
+		ORDER BY %s
+		LIMIT ? OFFSET ?
+	`, ftsJoin, ftsWhere, ftsOrder)
+
+	// Bind the search term once for WHERE, plus orderArgCount more times
+	// for any ? placeholders the dialect put in the order-by fragment.
+	searchArgs := make([]interface{}, 0, 3+orderArgCount)
+	searchArgs = append(searchArgs, query)
+	for i := 0; i < orderArgCount; i++ {
+		searchArgs = append(searchArgs, query)
+	}
+	searchArgs = append(searchArgs, limit, offset)
+
+	rows, err := s.db.Query(ftsQuery, searchArgs...)
+	if err != nil {
+		// FTS might not be available, fall back to LIKE search
 		return s.searchMessagesLike(query, offset, limit)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	messages, ids, err := scanMessageRows(rows)
 	if err != nil {
@@ -215,12 +294,12 @@ func (s *Store) SearchMessages(query string, offset, limit int) ([]APIMessage, i
 
 	// Get total count
 	var total int64
-	countQuery := `
+	countQuery := fmt.Sprintf(`
 		SELECT COUNT(*)
-		FROM messages_fts fts
-		JOIN messages m ON m.id = fts.rowid
-		WHERE messages_fts MATCH ? AND m.deleted_from_source_at IS NULL
-	`
+		FROM messages m
+		%s
+		WHERE %s AND m.deleted_from_source_at IS NULL
+	`, ftsJoin, ftsWhere)
 	if err := s.db.QueryRow(countQuery, query).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count FTS results: %w", err)
 	}
@@ -231,6 +310,227 @@ func (s *Store) SearchMessages(query string, offset, limit int) ([]APIMessage, i
 	}
 
 	return messages, total, nil
+}
+
+// SearchMessagesQuery searches messages using a parsed query with
+// support for structured operators (from:, to:, label:, etc.).
+func (s *Store) SearchMessagesQuery(
+	q *search.Query, offset, limit int,
+) ([]APIMessage, int64, error) {
+	var conditions []string
+	var args []interface{}
+
+	conditions = append(conditions,
+		"m.deleted_from_source_at IS NULL")
+
+	// FTS text terms. ftsEnabled is the authoritative signal that FTS is
+	// active — ftsJoin may be empty on dialects (e.g. PostgreSQL) whose
+	// tsvector lives on the main table and needs no extra join.
+	ftsEnabled := len(q.TextTerms) > 0
+	var ftsJoin, ftsOrder, ftsExpr string
+	var ftsOrderArgCount int
+	if ftsEnabled {
+		ftsExpr = buildFTSExpression(q.TextTerms)
+		join, where, orderBy, orderArgCount := s.dialect.FTSSearchClause()
+		ftsJoin = join
+		ftsOrder = orderBy
+		ftsOrderArgCount = orderArgCount
+		conditions = append(conditions, where)
+		args = append(args, ftsExpr)
+	}
+
+	// from: filter
+	for _, addr := range q.FromAddrs {
+		conditions = append(conditions, `EXISTS (
+			SELECT 1 FROM message_recipients mr2
+			JOIN participants p2 ON p2.id = mr2.participant_id
+			WHERE mr2.message_id = m.id
+			AND mr2.recipient_type = 'from'
+			AND LOWER(p2.email_address) LIKE ? ESCAPE '\'
+		)`)
+		args = append(args,
+			"%"+escapeLike(strings.ToLower(addr))+"%")
+	}
+
+	// to: filter
+	for _, addr := range q.ToAddrs {
+		conditions = append(conditions, `EXISTS (
+			SELECT 1 FROM message_recipients mr2
+			JOIN participants p2 ON p2.id = mr2.participant_id
+			WHERE mr2.message_id = m.id
+			AND mr2.recipient_type = 'to'
+			AND LOWER(p2.email_address) LIKE ? ESCAPE '\'
+		)`)
+		args = append(args,
+			"%"+escapeLike(strings.ToLower(addr))+"%")
+	}
+
+	// cc: filter
+	for _, addr := range q.CcAddrs {
+		conditions = append(conditions, `EXISTS (
+			SELECT 1 FROM message_recipients mr2
+			JOIN participants p2 ON p2.id = mr2.participant_id
+			WHERE mr2.message_id = m.id
+			AND mr2.recipient_type = 'cc'
+			AND LOWER(p2.email_address) LIKE ? ESCAPE '\'
+		)`)
+		args = append(args,
+			"%"+escapeLike(strings.ToLower(addr))+"%")
+	}
+
+	// bcc: filter
+	for _, addr := range q.BccAddrs {
+		conditions = append(conditions, `EXISTS (
+			SELECT 1 FROM message_recipients mr2
+			JOIN participants p2 ON p2.id = mr2.participant_id
+			WHERE mr2.message_id = m.id
+			AND mr2.recipient_type = 'bcc'
+			AND LOWER(p2.email_address) LIKE ? ESCAPE '\'
+		)`)
+		args = append(args,
+			"%"+escapeLike(strings.ToLower(addr))+"%")
+	}
+
+	// label: filter
+	for _, lbl := range q.Labels {
+		conditions = append(conditions, `EXISTS (
+			SELECT 1 FROM message_labels ml2
+			JOIN labels l2 ON l2.id = ml2.label_id
+			WHERE ml2.message_id = m.id
+			AND LOWER(l2.name) LIKE ? ESCAPE '\'
+		)`)
+		args = append(args,
+			"%"+escapeLike(strings.ToLower(lbl))+"%")
+	}
+
+	// subject: filter
+	for _, term := range q.SubjectTerms {
+		conditions = append(conditions,
+			`m.subject LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLike(term)+"%")
+	}
+
+	// has:attachment
+	if q.HasAttachment != nil && *q.HasAttachment {
+		conditions = append(conditions,
+			"m.has_attachments = 1")
+	}
+
+	// larger: / smaller:
+	if q.LargerThan != nil {
+		conditions = append(conditions, "m.size_estimate > ?")
+		args = append(args, *q.LargerThan)
+	}
+	if q.SmallerThan != nil {
+		conditions = append(conditions, "m.size_estimate < ?")
+		args = append(args, *q.SmallerThan)
+	}
+
+	// after: / before:
+	if q.AfterDate != nil {
+		conditions = append(conditions,
+			"COALESCE(m.sent_at, m.received_at, m.internal_date) >= ?")
+		args = append(args, q.AfterDate.Format(time.RFC3339))
+	}
+	if q.BeforeDate != nil {
+		conditions = append(conditions,
+			"COALESCE(m.sent_at, m.received_at, m.internal_date) < ?")
+		args = append(args, q.BeforeDate.Format(time.RFC3339))
+	}
+
+	whereClause := strings.Join(conditions, " AND ")
+
+	// Count query.
+	countSQL := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM messages m
+		%s
+		WHERE %s
+	`, ftsJoin, whereClause)
+
+	var total int64
+	if err := s.db.QueryRow(countSQL, args...).Scan(&total); err != nil {
+		if ftsEnabled {
+			return s.searchMessagesQueryNoFTS(q, offset, limit)
+		}
+		return nil, 0, fmt.Errorf("count search results: %w", err)
+	}
+
+	// Results query.
+	orderBy := "COALESCE(m.sent_at, m.received_at, m.internal_date) DESC"
+	if ftsEnabled {
+		orderBy = ftsOrder + ", " + orderBy
+	}
+	searchSQL := fmt.Sprintf(`
+		SELECT
+			m.id,
+			COALESCE(m.conversation_id, 0) as conversation_id,
+			COALESCE(m.subject, '') as subject,
+			COALESCE(p.email_address, '') as from_email,
+			COALESCE(m.sent_at, m.received_at, m.internal_date) as sent_at,
+			COALESCE(m.snippet, '') as snippet,
+			m.has_attachments,
+			m.size_estimate
+		FROM messages m
+		%s
+		LEFT JOIN message_recipients mr
+			ON mr.message_id = m.id AND mr.recipient_type = 'from'
+		LEFT JOIN participants p ON p.id = mr.participant_id
+		WHERE %s
+		ORDER BY %s
+		LIMIT ? OFFSET ?
+	`, ftsJoin, whereClause, orderBy)
+
+	// If the dialect's order-by fragment has ? placeholders, bind the FTS
+	// expression that many extra times — right after the WHERE args and
+	// before LIMIT/OFFSET so Rebind assigns them the correct positions.
+	resultArgs := make([]interface{}, 0, len(args)+ftsOrderArgCount+2)
+	resultArgs = append(resultArgs, args...)
+	for i := 0; i < ftsOrderArgCount; i++ {
+		resultArgs = append(resultArgs, ftsExpr)
+	}
+	resultArgs = append(resultArgs, limit, offset)
+	rows, err := s.db.Query(searchSQL, resultArgs...)
+	if err != nil {
+		// FTS5 not available -- fall back if we used it.
+		if ftsEnabled {
+			return s.searchMessagesQueryNoFTS(q, offset, limit)
+		}
+		return nil, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	messages, ids, err := scanMessageRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if len(ids) > 0 {
+		if err := s.batchPopulate(messages, ids); err != nil {
+			return nil, 0, err
+		}
+	}
+
+	return messages, total, nil
+}
+
+// buildFTSExpression builds an FTS5 MATCH expression from text terms.
+func buildFTSExpression(terms []string) string {
+	quoted := make([]string, len(terms))
+	for i, t := range terms {
+		quoted[i] = `"` + strings.ReplaceAll(t, `"`, `""`) + `"`
+	}
+	return strings.Join(quoted, " AND ")
+}
+
+// searchMessagesQueryNoFTS is a fallback when FTS5 is unavailable.
+func (s *Store) searchMessagesQueryNoFTS(
+	q *search.Query, offset, limit int,
+) ([]APIMessage, int64, error) {
+	fallbackQ := *q
+	fallbackQ.SubjectTerms = append(fallbackQ.SubjectTerms, q.TextTerms...)
+	fallbackQ.TextTerms = nil
+	return s.SearchMessagesQuery(&fallbackQ, offset, limit)
 }
 
 // escapeLike escapes SQL LIKE special characters (%, _) so they are
@@ -279,7 +579,7 @@ func (s *Store) searchMessagesLike(query string, offset, limit int) ([]APIMessag
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	messages, ids, err := scanMessageRows(rows)
 	if err != nil {
@@ -353,12 +653,22 @@ func (s *Store) batchPopulate(messages []APIMessage, ids []int64) error {
 	if err != nil {
 		return err
 	}
+	ccMap, err := s.batchGetRecipients(ids, "cc")
+	if err != nil {
+		return err
+	}
+	bccMap, err := s.batchGetRecipients(ids, "bcc")
+	if err != nil {
+		return err
+	}
 	labelMap, err := s.batchGetLabels(ids)
 	if err != nil {
 		return err
 	}
 	for i := range messages {
 		messages[i].To = recipientMap[messages[i].ID]
+		messages[i].Cc = ccMap[messages[i].ID]
+		messages[i].Bcc = bccMap[messages[i].ID]
 		messages[i].Labels = labelMap[messages[i].ID]
 	}
 	return nil
@@ -389,7 +699,7 @@ func (s *Store) batchGetRecipients(messageIDs []int64, recipientType string) (ma
 	if err != nil {
 		return nil, fmt.Errorf("batch get recipients: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[int64][]string, len(messageIDs))
 	for rows.Next() {
@@ -432,7 +742,7 @@ func (s *Store) batchGetLabels(messageIDs []int64) (map[int64][]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("batch get labels: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[int64][]string, len(messageIDs))
 	for rows.Next() {
@@ -462,7 +772,7 @@ func (s *Store) getRecipients(messageID int64, recipientType string) ([]string, 
 	if err != nil {
 		return nil, fmt.Errorf("get recipients: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var recipients []string
 	for rows.Next() {
@@ -491,7 +801,7 @@ func (s *Store) getLabels(messageID int64) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get labels: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var labels []string
 	for rows.Next() {

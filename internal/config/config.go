@@ -12,6 +12,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/wesm/msgvault/internal/fileutil"
+	"github.com/wesm/msgvault/internal/vector"
 )
 
 // AzureOpenAIConfig holds Azure OpenAI service configuration.
@@ -110,6 +111,7 @@ type RemoteConfig struct {
 // Config represents the msgvault configuration.
 type Config struct {
 	Data        DataConfig        `toml:"data"`
+	Log         LogConfig         `toml:"log"`
 	OAuth       OAuthConfig       `toml:"oauth"`
 	Sync        SyncConfig        `toml:"sync"`
 	Encryption  EncryptionConfig  `toml:"encryption"`
@@ -118,6 +120,7 @@ type Config struct {
 	AzureOpenAI AzureOpenAIConfig `toml:"azure_openai"`
 	Server      ServerConfig      `toml:"server"`
 	Remote      RemoteConfig      `toml:"remote"`
+	Vector      vector.Config     `toml:"vector"`
 	Accounts    []AccountSchedule `toml:"accounts"`
 
 	// Computed paths (not from config file)
@@ -131,18 +134,38 @@ type EncryptionConfig struct {
 	KDFIterations int  `toml:"kdf_iterations"`
 }
 
-// MicrosoftConfig holds Microsoft 365 / Azure AD OAuth configuration.
-type MicrosoftConfig struct {
-	ClientID string `toml:"client_id"`
-	TenantID string `toml:"tenant_id"` // defaults to "common" for multi-tenant
-}
+// LogConfig holds logging configuration. File logging is opt-in:
+// set enabled = true or dir = "..." to write structured JSON logs
+// to disk. Without either, msgvault only writes to stderr (which
+// is the default behavior users already expect). The --log-file
+// CLI flag also enables file logging for a single run.
+type LogConfig struct {
+	// Dir is the directory where log files live. Empty means
+	// "<data dir>/logs". Setting this implicitly enables file
+	// logging.
+	Dir string `toml:"dir"`
 
-// EffectiveTenantID returns the tenant ID, defaulting to "common".
-func (m *MicrosoftConfig) EffectiveTenantID() string {
-	if m.TenantID == "" {
-		return "common"
-	}
-	return m.TenantID
+	// Level overrides the default logging level. Accepted values
+	// are "debug", "info", "warn", "error". Empty means "info"
+	// (or "debug" when --verbose is passed).
+	Level string `toml:"level"`
+
+	// Enabled turns on persistent file logging. When false (the
+	// default), the CLI only writes to stderr. Set to true, or
+	// set dir, to opt in to durable on-disk logs.
+	Enabled bool `toml:"enabled"`
+
+	// SQLSlowMs is the threshold above which any individual SQL
+	// query is logged at WARN regardless of the main level.
+	// Zero means "use the built-in default" (100 ms). Set to a
+	// very large value to effectively disable slow logging.
+	SQLSlowMs int64 `toml:"sql_slow_ms"`
+
+	// SQLTrace, when true, logs every SQL query at INFO level
+	// with statement text, arg count, duration, and error. This
+	// is voluminous — leave off in normal use and flip it on
+	// (via config or --log-sql) only when debugging.
+	SQLTrace bool `toml:"sql_trace"`
 }
 
 // DataConfig holds data storage configuration.
@@ -198,6 +221,21 @@ func (o *OAuthConfig) HasAnyConfig() bool {
 	return false
 }
 
+// MicrosoftConfig holds Microsoft 365 / Azure AD OAuth configuration.
+type MicrosoftConfig struct {
+	ClientID string `toml:"client_id"`
+	TenantID string `toml:"tenant_id"`
+}
+
+// EffectiveTenantID returns the tenant ID, defaulting to "common"
+// (multi-tenant, works for personal + org accounts).
+func (c *MicrosoftConfig) EffectiveTenantID() string {
+	if c.TenantID == "" {
+		return "common"
+	}
+	return c.TenantID
+}
+
 // SyncConfig holds sync-related configuration.
 type SyncConfig struct {
 	RateLimitQPS int `toml:"rate_limit_qps"`
@@ -219,7 +257,7 @@ func DefaultHome() string {
 // NewDefaultConfig returns a configuration with default values.
 func NewDefaultConfig() *Config {
 	homeDir := DefaultHome()
-	return &Config{
+	cfg := &Config{
 		HomeDir: homeDir,
 		Data: DataConfig{
 			DataDir: homeDir,
@@ -238,6 +276,8 @@ func NewDefaultConfig() *Config {
 		},
 		Accounts: []AccountSchedule{},
 	}
+	cfg.Vector.ApplyDefaults()
+	return cfg
 }
 
 // Load reads the configuration from the specified file.
@@ -289,15 +329,17 @@ func Load(path, homeDir string) (*Config, error) {
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		if strings.Contains(err.Error(), "invalid escape") ||
 			strings.Contains(err.Error(), "hexadecimal digits after") {
-			return nil, fmt.Errorf("decode config: %w\n\nhint: Windows paths in TOML must use "+
-				"forward slashes (C:/Games/msgvault) or single quotes ('C:\\Games\\msgvault').", err)
+			return nil, fmt.Errorf("decode config: %w -- hint: Windows paths in TOML must use "+
+				"forward slashes (C:/Games/msgvault) or single quotes ('C:\\Games\\msgvault')", err)
 		}
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 
 	// Expand ~ in paths
 	cfg.Data.DataDir = expandPath(cfg.Data.DataDir)
+	cfg.Log.Dir = expandPath(cfg.Log.Dir)
 	cfg.OAuth.ClientSecrets = expandPath(cfg.OAuth.ClientSecrets)
+	cfg.Vector.DBPath = expandPath(cfg.Vector.DBPath)
 	for name, app := range cfg.OAuth.Apps {
 		app.ClientSecrets = expandPath(app.ClientSecrets)
 		cfg.OAuth.Apps[name] = app
@@ -308,12 +350,20 @@ func Load(path, homeDir string) (*Config, error) {
 	// directory so behavior doesn't depend on the working directory.
 	if explicit {
 		cfg.Data.DataDir = resolveRelative(cfg.Data.DataDir, cfg.HomeDir)
+		cfg.Log.Dir = resolveRelative(cfg.Log.Dir, cfg.HomeDir)
 		cfg.OAuth.ClientSecrets = resolveRelative(cfg.OAuth.ClientSecrets, cfg.HomeDir)
+		cfg.Vector.DBPath = resolveRelative(cfg.Vector.DBPath, cfg.HomeDir)
 		for name, app := range cfg.OAuth.Apps {
 			app.ClientSecrets = resolveRelative(app.ClientSecrets, cfg.HomeDir)
 			cfg.OAuth.Apps[name] = app
 		}
 	}
+
+	// Re-apply numeric defaults over any zero-valued vector fields that
+	// survived decode (e.g. `max_retries = 0` or an omitted timeout).
+	// Preprocess booleans are *bool so pointer-nil still means "default";
+	// an explicit false in the file stays false.
+	cfg.Vector.ApplyDefaults()
 
 	return cfg, nil
 }
@@ -349,6 +399,15 @@ func (c *Config) BackupsDir() string {
 // DeletionsDir returns the path to the deletions directory.
 func (c *Config) DeletionsDir() string {
 	return filepath.Join(c.Data.DataDir, "deletions")
+}
+
+// LogsDir returns the path to the logs directory. Uses [log].dir
+// from config when set; otherwise falls back to <data_dir>/logs.
+func (c *Config) LogsDir() string {
+	if c.Log.Dir != "" {
+		return c.Log.Dir
+	}
+	return filepath.Join(c.Data.DataDir, "logs")
 }
 
 // EnsureHomeDir creates the msgvault home directory if it doesn't exist.
@@ -400,8 +459,8 @@ func (c *Config) Save() error {
 	success := false
 	defer func() {
 		if !success {
-			tmp.Close()
-			os.Remove(tmpPath)
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
 		}
 	}()
 

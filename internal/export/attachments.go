@@ -99,7 +99,7 @@ func Attachments(zipFilename, attachmentsDir, outputDir string, attachments []qu
 	}
 
 	if stats.Count == 0 || writeError {
-		os.Remove(zipPath)
+		_ = os.Remove(zipPath)
 		stats.WriteError = writeError
 		return stats
 	}
@@ -160,7 +160,7 @@ func addAttachmentToZip(zw *zip.Writer, root string, att query.AttachmentInfo, u
 	if err != nil {
 		return 0, err
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 
 	filename := resolveUniqueFilename(att.Filename, att.ContentHash, usedNames)
 
@@ -309,7 +309,7 @@ func exportAttachmentToFile(outputDir, attachmentsDir, contentHash, filename str
 		}
 		return ExportedFile{}, fmt.Errorf("open source: %w", err)
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	destPath := filepath.Join(outputDir, filename)
 	dst, finalPath, err := CreateExclusiveFile(destPath, 0600)
@@ -320,11 +320,11 @@ func exportAttachmentToFile(outputDir, attachmentsDir, contentHash, filename str
 	n, copyErr := io.Copy(dst, src)
 	closeErr := dst.Close()
 	if copyErr != nil {
-		os.Remove(finalPath)
+		_ = os.Remove(finalPath)
 		return ExportedFile{}, fmt.Errorf("write: %w", copyErr)
 	}
 	if closeErr != nil {
-		os.Remove(finalPath)
+		_ = os.Remove(finalPath)
 		return ExportedFile{}, fmt.Errorf("close: %w", closeErr)
 	}
 

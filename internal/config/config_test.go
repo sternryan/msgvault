@@ -593,7 +593,7 @@ func TestMkTempDir(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MkTempDir failed: %v", err)
 		}
-		defer os.RemoveAll(dir)
+		defer func() { _ = os.RemoveAll(dir) }()
 
 		if _, err := os.Stat(dir); err != nil {
 			t.Errorf("temp dir does not exist: %v", err)
@@ -607,7 +607,7 @@ func TestMkTempDir(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MkTempDir failed: %v", err)
 		}
-		defer os.RemoveAll(dir)
+		defer func() { _ = os.RemoveAll(dir) }()
 
 		if !strings.HasPrefix(dir, preferred) {
 			t.Errorf("temp dir %q not under preferred %q", dir, preferred)
@@ -620,7 +620,7 @@ func TestMkTempDir(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MkTempDir failed: %v", err)
 		}
-		defer os.RemoveAll(dir)
+		defer func() { _ = os.RemoveAll(dir) }()
 
 		// Should have used system temp, not errored
 		if _, err := os.Stat(dir); err != nil {
@@ -633,7 +633,7 @@ func TestMkTempDir(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MkTempDir failed: %v", err)
 		}
-		defer os.RemoveAll(dir)
+		defer func() { _ = os.RemoveAll(dir) }()
 
 		// Should have fallen back to system temp
 		if strings.Contains(dir, "nonexistent") {
@@ -657,7 +657,7 @@ func TestMkTempDir(t *testing.T) {
 		// configurations can still write to 0500 directories).
 		probe, probeErr := os.MkdirTemp(restrictedTmp, "probe-*")
 		if probeErr == nil {
-			os.Remove(probe)
+			_ = os.Remove(probe)
 			t.Skip("chmod 0500 did not restrict writes (running as root or permissive ACLs)")
 		}
 
@@ -670,7 +670,7 @@ func TestMkTempDir(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MkTempDir failed: %v", err)
 		}
-		defer os.RemoveAll(dir)
+		defer func() { _ = os.RemoveAll(dir) }()
 
 		expectedBase := filepath.Join(msgvaultHome, "tmp")
 		if !strings.HasPrefix(dir, expectedBase) {
@@ -1070,8 +1070,8 @@ func TestSave_FailurePreservesExisting(t *testing.T) {
 	// Probe whether the restriction actually works
 	probe, probeErr := os.CreateTemp(tmpDir, "probe-*")
 	if probeErr == nil {
-		probe.Close()
-		os.Remove(probe.Name())
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
 		t.Skip("chmod 0500 did not restrict writes (running as root)")
 	}
 
@@ -1314,6 +1314,120 @@ client_secrets = "/absolute/personal.json"
 	}
 }
 
+func TestLoadExpandsVectorDBPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	t.Setenv("MSGVAULT_HOME", tmpDir)
+
+	configContent := `
+[vector]
+enabled = true
+db_path = "~/custom/vectors.db"
+
+[vector.embeddings]
+endpoint = "http://localhost:8080/v1"
+model = "nomic-embed-text-v1.5"
+dimension = 768
+`
+	configPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load("", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	expected := filepath.Join(home, "custom/vectors.db")
+	if cfg.Vector.DBPath != expected {
+		t.Errorf("Vector.DBPath = %q, want %q", cfg.Vector.DBPath, expected)
+	}
+}
+
+func TestLoadResolvesRelativeVectorDBPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	configContent := `
+[vector]
+enabled = true
+db_path = "sub/vectors.db"
+
+[vector.embeddings]
+endpoint = "http://localhost:8080/v1"
+model = "nomic-embed-text-v1.5"
+dimension = 768
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(configPath, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	expected := filepath.Join(tmpDir, "sub/vectors.db")
+	if cfg.Vector.DBPath != expected {
+		t.Errorf("Vector.DBPath = %q, want %q", cfg.Vector.DBPath, expected)
+	}
+}
+
+// TestLoadReappliesVectorDefaults verifies that a zero-valued numeric
+// field in the TOML file (e.g. max_retries = 0) gets normalized back to
+// the documented default so users cannot accidentally disable retries or
+// timeouts. Preprocess booleans use pointer semantics and are exempt
+// from this re-defaulting.
+func TestLoadReappliesVectorDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	configContent := `
+[vector]
+enabled = true
+
+[vector.embeddings]
+endpoint = "http://localhost:8080/v1"
+model = "nomic-embed-text"
+dimension = 768
+max_retries = 0
+timeout = "0s"
+
+[vector.preprocess]
+strip_signatures = false
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(configPath, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Vector.Embeddings.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want 3 (re-defaulted from explicit 0)", cfg.Vector.Embeddings.MaxRetries)
+	}
+	// NOTE: TOML "0s" currently decodes to time.Duration(0); post-decode
+	// ApplyDefaults lifts it back to 30s to avoid a hang.
+	if cfg.Vector.Embeddings.Timeout <= 0 {
+		t.Errorf("Timeout = %v, want positive (re-defaulted from explicit 0s)", cfg.Vector.Embeddings.Timeout)
+	}
+	// Explicit false in the TOML file must survive.
+	if cfg.Vector.Preprocess.StripSignaturesEnabled() != false {
+		t.Errorf("StripSignaturesEnabled() = %v, want false (user explicitly set)", cfg.Vector.Preprocess.StripSignaturesEnabled())
+	}
+	// Omitted sibling stays at default true.
+	if cfg.Vector.Preprocess.StripQuotesEnabled() != true {
+		t.Errorf("StripQuotesEnabled() = %v, want true (unset → default)", cfg.Vector.Preprocess.StripQuotesEnabled())
+	}
+}
+
 func TestLoadWithNamedOAuthApps_RelativePaths(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -1418,5 +1532,36 @@ func TestSave_AllowInsecureRoundTrip(t *testing.T) {
 	}
 	if !loaded.Remote.AllowInsecure {
 		t.Error("AllowInsecure should be true after saving with true")
+	}
+}
+
+func TestMicrosoftConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	configContent := `
+[microsoft]
+client_id = "test-client-id-123"
+tenant_id = "my-tenant"
+`
+	configPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(configPath, tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Microsoft.ClientID != "test-client-id-123" {
+		t.Errorf("Microsoft.ClientID = %q, want %q", cfg.Microsoft.ClientID, "test-client-id-123")
+	}
+	if cfg.Microsoft.TenantID != "my-tenant" {
+		t.Errorf("Microsoft.TenantID = %q, want %q", cfg.Microsoft.TenantID, "my-tenant")
+	}
+}
+
+func TestMicrosoftConfig_DefaultTenant(t *testing.T) {
+	cfg := NewDefaultConfig()
+	if cfg.Microsoft.EffectiveTenantID() != "common" {
+		t.Errorf("EffectiveTenantID() = %q, want %q", cfg.Microsoft.EffectiveTenantID(), "common")
 	}
 }
