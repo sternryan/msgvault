@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // LexEntry is one row from forge graph.db.entities indexed by lower-cased
@@ -28,7 +28,11 @@ type Lexicon struct {
 }
 
 // OpenLexicon opens the forge graph.db read-only and pre-loads the entity
-// index. Per Pitfall 5 it uses the mattn/go-sqlite3 driver (NOT sqlcipher).
+// index. The mutecomm/go-sqlcipher driver registers itself as "sqlite3" and
+// transparently reads plaintext SQLite files when no key is set, which is
+// what we need for forge graph.db. (The plan originally specified mattn/
+// go-sqlite3 here, but it duplicates SQLite C symbols at link time when both
+// drivers ship in one binary — Rule 1 deviation, see SUMMARY.md.)
 func OpenLexicon(graphDBPath string) (*Lexicon, error) {
 	dsn := fmt.Sprintf("file:%s?mode=ro&_query_only=true", url.QueryEscape(graphDBPath))
 	db, err := sql.Open("sqlite3", dsn)

@@ -22,7 +22,6 @@ require (
 	github.com/mark3labs/mcp-go v0.48.0
 	github.com/mattn/go-isatty v0.0.21
 	github.com/mattn/go-runewidth v0.0.23
-	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/muesli/termenv v0.16.0
 	github.com/mutecomm/go-sqlcipher/v4 v4.4.2
