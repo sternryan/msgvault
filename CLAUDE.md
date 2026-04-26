@@ -12,6 +12,16 @@ PR descriptions should be concise and changelog-oriented: what changed, why, and
 
 msgvault is an offline Gmail archive tool that exports and stores email data locally with full-text search capabilities. The goal is to archive 20+ years of Gmail data from multiple accounts, make it searchable, and eventually delete emails from Gmail once safely archived.
 
+## Triage cross-repo seam (Phase 14, sibling repo `forge`)
+
+msgvault's `triage` / `digest send` / `trusted-contacts bootstrap` subcommands consume forge's `graph.db` and `sources.db` read-only via the `?mode=ro` URI parameter. Use the `mutecomm/go-sqlcipher/v4` driver with no key set — NOT `mattn/go-sqlite3`. Both link the SQLite C library and produce ~260 duplicate symbols at link time; sqlcipher with no key transparently handles plaintext SQLite files written by forge.
+
+Scoring is pure SQL + regex + lexical (criterion 1-7 weights locked in `internal/triage/scorer.go`). **Never call LLM/encoder endpoints in the triage hot path** — D-04 of Phase 14. If a future scorer needs semantic similarity, plug it into the `topic_pairs` cache populated by forge `audit-bridges` / `synthesize`.
+
+`gmail.send` scope is required for `digest send`. Existing tokens hold `readonly + modify` only; users must re-grant interactively via `msgvault add-account --reauth --scopes=triage <email>` (see README "Triage pipeline" section). The launchd plist deliberately omits `ProcessType` — setting `Background` makes macOS suspend the service unpredictably.
+
+JSONL emit (`internal/triage/jsonl.go`) is byte-deterministic for byte-identical inputs (no `time.Now()` in the encoder, `SetEscapeHTML(false)`). The 11-field `Candidate` schema with the 7-key `scores` object is the locked contract with forge's `_ingest_from_triage`; changing it requires updating both repos.
+
 ## Architecture (Go)
 
 Single-binary Go application:
