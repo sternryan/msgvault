@@ -52,6 +52,16 @@ Examples:
 		if syncLimit < 0 {
 			return fmt.Errorf("--limit must be a non-negative number")
 		}
+		if syncAfter != "" {
+			if _, err := time.Parse("2006-01-02", syncAfter); err != nil {
+				return fmt.Errorf("invalid --after date %q (expected YYYY-MM-DD): %w", syncAfter, err)
+			}
+		}
+		if syncBefore != "" {
+			if _, err := time.Parse("2006-01-02", syncBefore); err != nil {
+				return fmt.Errorf("invalid --before date %q (expected YYYY-MM-DD): %w", syncBefore, err)
+			}
+		}
 
 		// Validate date formats upfront
 		if syncAfter != "" {
@@ -71,7 +81,7 @@ Examples:
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		if err := s.InitSchema(); err != nil {
 			return fmt.Errorf("init schema: %w", err)
@@ -87,7 +97,7 @@ Examples:
 			// keep only syncable types (gmail, imap). Non-syncable
 			// sources like mbox/apple-mail imports share the same
 			// identifier namespace but cannot be synced.
-			allMatches, err := s.GetSourcesByIdentifier(args[0])
+			allMatches, err := s.GetSourcesByIdentifierOrDisplayName(args[0])
 			if err != nil {
 				return fmt.Errorf("look up source: %w", err)
 			}
@@ -130,21 +140,13 @@ Examples:
 						continue
 					}
 				case "imap":
-					hasAuth := imaplib.HasCredentials(cfg.TokensDir(), src.Identifier)
-					if !hasAuth && src.SyncConfig.Valid && src.SyncConfig.String != "" {
-						imapCfg, parseErr := imaplib.ConfigFromJSON(src.SyncConfig.String)
-						if parseErr == nil && imapCfg.EffectiveAuthMethod() == imaplib.AuthXOAuth2 {
-							msMgr := microsoft.NewManager(
-								cfg.Microsoft.ClientID,
-								cfg.Microsoft.EffectiveTenantID(),
-								cfg.TokensDir(),
-								logger,
-							)
-							hasAuth = msMgr.HasToken(imapCfg.Username)
-						}
+					skipMsg, parseErr := imapSkipReason(src)
+					if parseErr != nil {
+						syncErrors = append(syncErrors, fmt.Sprintf("%s: malformed sync_config: %v", src.Identifier, parseErr))
+						continue
 					}
-					if !hasAuth {
-						fmt.Printf("Skipping %s (no credentials - run 'add-imap' or 'add-o365' first)\n", src.Identifier)
+					if skipMsg != "" {
+						fmt.Println(skipMsg)
 						continue
 					}
 				default:
@@ -173,6 +175,21 @@ Examples:
 			fmt.Println("\nInterrupted. Saving checkpoint...")
 			cancel()
 		}()
+
+		// Open vector backend (optional) so newly-ingested messages
+		// are enqueued for embedding.
+		vf, err := setupVectorFeatures(ctx, s.DB(), dbPath)
+		if err != nil {
+			return fmt.Errorf("vector features: %w", err)
+		}
+		defer func() {
+			if vf != nil && vf.Close != nil {
+				if closeErr := vf.Close(); closeErr != nil {
+					logger.Warn("closing vectors.db failed", "error", closeErr)
+				}
+			}
+		}()
+
 		for _, src := range sources {
 			if ctx.Err() != nil {
 				break
@@ -186,11 +203,14 @@ Examples:
 				}
 			}
 
-			if err := runFullSync(ctx, s, getOAuthMgr, src); err != nil {
+			if err := runFullSync(ctx, s, getOAuthMgr, src, vf); err != nil {
 				syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", src.Identifier, err))
 				continue
 			}
 		}
+
+		// Rebuild analytics cache.
+		rebuildCacheAfterWrite(dbPath)
 
 		if len(syncErrors) > 0 {
 			fmt.Println()
@@ -235,15 +255,32 @@ func buildAPIClient(ctx context.Context, src *store.Source, getOAuthMgr func(str
 			return nil, fmt.Errorf("parse IMAP config: %w", err)
 		}
 
-		var clientOpts []imaplib.Option
-		clientOpts = append(clientOpts, imaplib.WithLogger(logger))
+		var opts []imaplib.Option
+		opts = append(opts, imaplib.WithLogger(logger))
 
-		var password string
-		if imapCfg.EffectiveAuthMethod() == imaplib.AuthXOAuth2 {
-			// Microsoft 365 XOAUTH2: get token source from Microsoft OAuth manager
+		var since, before time.Time
+		if syncAfter != "" {
+			t, err := time.Parse("2006-01-02", syncAfter)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --after date %q (expected YYYY-MM-DD): %w", syncAfter, err)
+			}
+			since = t
+		}
+		if syncBefore != "" {
+			t, err := time.Parse("2006-01-02", syncBefore)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --before date %q (expected YYYY-MM-DD): %w", syncBefore, err)
+			}
+			before = t
+		}
+		if !since.IsZero() || !before.IsZero() {
+			opts = append(opts, imaplib.WithDateFilter(since, before))
+		}
+
+		switch imapCfg.EffectiveAuthMethod() {
+		case imaplib.AuthXOAuth2:
 			if cfg.Microsoft.ClientID == "" {
-				return nil, fmt.Errorf("Microsoft OAuth not configured for XOAUTH2 source %s\n\n"+
-					"add [microsoft] client_id to config.toml", src.Identifier)
+				return nil, fmt.Errorf("microsoft OAuth not configured — add a [microsoft] section with client_id to config.toml")
 			}
 			msMgr := microsoft.NewManager(
 				cfg.Microsoft.ClientID,
@@ -251,40 +288,41 @@ func buildAPIClient(ctx context.Context, src *store.Source, getOAuthMgr func(str
 				cfg.TokensDir(),
 				logger,
 			)
-			if !msMgr.HasToken(imapCfg.Username) {
-				return nil, fmt.Errorf("no Microsoft token for %s (run 'add-o365 %s' first)", imapCfg.Username, imapCfg.Username)
-			}
-			ts, err := msMgr.TokenSource(ctx, imapCfg.Username)
+			tokenFn, err := msMgr.TokenSource(ctx, imapCfg.Username)
 			if err != nil {
-				return nil, fmt.Errorf("get Microsoft token source: %w", err)
+				return nil, fmt.Errorf("load Microsoft token: %w (run 'add-o365' first)", err)
 			}
-			clientOpts = append(clientOpts, imaplib.WithTokenSource(ts))
-		} else {
-			// Standard password-based IMAP auth
-			var err error
-			password, err = imaplib.LoadCredentials(cfg.TokensDir(), src.Identifier)
+			opts = append(opts, imaplib.WithTokenSource(tokenFn))
+			return imaplib.NewClient(imapCfg, "", opts...), nil
+		default:
+			password, err := imaplib.LoadCredentials(cfg.TokensDir(), src.Identifier)
 			if err != nil {
 				return nil, fmt.Errorf("load IMAP credentials: %w (run 'add-imap' first)", err)
 			}
+			return imaplib.NewClient(imapCfg, password, opts...), nil
 		}
-		return imaplib.NewClient(imapCfg, password, clientOpts...), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported source type %q", src.SourceType)
 	}
 }
 
-func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (*oauth.Manager, error), src *store.Source) error {
+func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (*oauth.Manager, error), src *store.Source, vf *vectorFeatures) error {
 	apiClient, err := buildAPIClient(ctx, src, getOAuthMgr)
 	if err != nil {
 		return err
 	}
-	defer apiClient.Close()
+	defer func() { _ = apiClient.Close() }()
 
-	// Build query from flags (Gmail only).
+	// Build query from flags (Gmail only; IMAP date filters are
+	// handled via WithDateFilter on the client).
 	query := buildSyncQuery()
 	if query != "" && src.SourceType == "imap" {
-		fmt.Printf("Warning: --query/--before/--after are not supported for IMAP sources and will be ignored.\n\n")
+		// --after/--before are handled natively by IMAP SEARCH;
+		// only warn about --query which has no IMAP equivalent.
+		if syncQuery != "" {
+			fmt.Printf("Warning: --query is not supported for IMAP sources and will be ignored.\n\n")
+		}
 		query = ""
 	}
 
@@ -309,10 +347,17 @@ func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (
 	syncer := sync.New(apiClient, s, opts).
 		WithLogger(logger).
 		WithProgress(&CLIProgress{})
+	if vf != nil {
+		syncer.SetEmbedEnqueuer(vf.Enqueuer)
+	}
 
 	// Run sync
 	startTime := time.Now()
-	fmt.Printf("Starting full sync for %s\n", src.Identifier)
+	displayID := src.Identifier
+	if src.DisplayName.Valid && src.DisplayName.String != "" {
+		displayID = src.DisplayName.String
+	}
+	fmt.Printf("Starting full sync for %s\n", displayID)
 	if query != "" && src.SourceType != "imap" {
 		fmt.Printf("Query: %s\n", query)
 	}
@@ -353,7 +398,7 @@ func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (
 
 	elapsed := time.Since(startTime)
 	logger.Info("sync completed",
-		"identifier", src.Identifier,
+		"identifier", displayID,
 		"messages_added", summary.MessagesAdded,
 		"elapsed", elapsed,
 	)
@@ -475,6 +520,44 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm %ds", m, s)
 	}
 	return fmt.Sprintf("%ds", s)
+}
+
+// imapSkipReason checks whether an IMAP source has the credentials needed to
+// sync. Return values:
+//   - ("", nil)     — credentials present, source is ready
+//   - ("msg", nil)  — credentials absent; print the message and skip
+//   - ("", err)     — sync_config is malformed; add to the error list
+func imapSkipReason(src *store.Source) (string, error) {
+	if !src.SyncConfig.Valid || src.SyncConfig.String == "" {
+		if !imaplib.HasCredentials(cfg.TokensDir(), src.Identifier) {
+			return fmt.Sprintf("Skipping %s (no credentials — run 'add-imap' or 'add-o365' first)", src.Identifier), nil
+		}
+		return "", nil
+	}
+	imapCfg, err := imaplib.ConfigFromJSON(src.SyncConfig.String)
+	if err != nil {
+		return "", err
+	}
+	switch imapCfg.EffectiveAuthMethod() {
+	case imaplib.AuthXOAuth2:
+		if cfg.Microsoft.ClientID == "" {
+			return fmt.Sprintf("Skipping %s (Microsoft OAuth not configured — add client_id to [microsoft] in config.toml)", src.Identifier), nil
+		}
+		msMgr := microsoft.NewManager(
+			cfg.Microsoft.ClientID,
+			cfg.Microsoft.EffectiveTenantID(),
+			cfg.TokensDir(),
+			logger,
+		)
+		if !msMgr.HasToken(imapCfg.Username) {
+			return fmt.Sprintf("Skipping %s (no Microsoft token — run 'add-o365' first)", src.Identifier), nil
+		}
+	default:
+		if !imaplib.HasCredentials(cfg.TokensDir(), src.Identifier) {
+			return fmt.Sprintf("Skipping %s (no credentials — run 'add-imap' first)", src.Identifier), nil
+		}
+	}
+	return "", nil
 }
 
 func init() {

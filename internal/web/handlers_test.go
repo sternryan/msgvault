@@ -105,6 +105,14 @@ func (m *mockEngine) SearchFastWithStats(_ context.Context, _ *search.Query, _ s
 	}, nil
 }
 
+func (m *mockEngine) GetMessageSummariesByIDs(_ context.Context, ids []int64) ([]query.MessageSummary, error) {
+	out := make([]query.MessageSummary, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, query.MessageSummary{ID: id, Subject: "Mock Message"})
+	}
+	return out, nil
+}
+
 func (m *mockEngine) GetGmailIDsByFilter(_ context.Context, _ query.MessageFilter) ([]string, error) {
 	return []string{"msg1", "msg2"}, nil
 }

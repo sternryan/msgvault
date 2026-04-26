@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS sources (
     last_sync_at DATETIME,
     sync_cursor TEXT,           -- platform-specific: historyId, rowid, timestamp
     sync_config JSON,           -- platform-specific sync settings
+    oauth_app TEXT,             -- named OAuth app binding (NULL = default)
 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -396,6 +397,7 @@ CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id);
 -- Attachments
 CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(content_hash);
+CREATE INDEX IF NOT EXISTS idx_attachments_storage_path ON attachments(storage_path);
 
 -- Labels
 CREATE INDEX IF NOT EXISTS idx_labels_source ON labels(source_id);

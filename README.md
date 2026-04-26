@@ -15,12 +15,11 @@ Archive a lifetime of email. Analytics and search in milliseconds, entirely offl
 
 Your messages are yours. Decades of correspondence, attachments, and history shouldn't be locked behind a web interface or an API. msgvault downloads a complete local copy and then everything runs offline. Search, analytics, and the MCP server all work against local data with no network access required.
 
-Currently supports Gmail, Microsoft 365 / Outlook.com, and IMAP sync, plus offline imports from MBOX exports and Apple Mail (.emlx) directories.
+Currently supports Gmail and IMAP sync, plus offline imports from MBOX exports and Apple Mail (.emlx) directories.
 
 ## Features
 
 - **Full Gmail backup**: raw MIME, attachments, labels, and metadata
-- **Microsoft 365 / Outlook.com**: OAuth2 with XOAUTH2 IMAP — personal and org accounts
 - **IMAP sync**: archive mail from any standard IMAP server
 - **MBOX / Apple Mail import**: import email from MBOX exports or Apple Mail (.emlx) directories
 - **Interactive TUI**: drill-down analytics over your entire message history, powered by DuckDB over Parquet — connects to a remote `msgvault serve` instance or runs locally
@@ -28,7 +27,7 @@ Currently supports Gmail, Microsoft 365 / Outlook.com, and IMAP sync, plus offli
 - **MCP server**: access your full archive at the speed of thought in Claude Desktop and other MCP-capable AI agents
 - **DuckDB analytics**: millisecond aggregate queries across hundreds of thousands of messages in the TUI, CLI, and MCP server
 - **Incremental sync**: History API picks up only new and changed messages
-- **Multi-account**: archive Gmail, Microsoft 365, and IMAP accounts in a single database
+- **Multi-account**: archive several Gmail and IMAP accounts in a single database
 - **Resumable**: interrupted syncs resume from the last checkpoint
 - **Content-addressed attachments**: deduplicated by SHA-256
 
@@ -80,8 +79,7 @@ msgvault tui
 | Command | Description |
 |---------|-------------|
 | `init-db` | Create the database |
-| `add-account EMAIL` | Authorize a Gmail account (use `--headless` for servers) |
-| `add-o365 EMAIL` | Add a Microsoft 365 / Outlook.com account via OAuth2 |
+| `add-account EMAIL` | Authorize a Gmail account (use `--headless` for servers) or add an IMAP account |
 | `sync-full EMAIL` | Full sync (`--limit N`, `--after`/`--before` for date ranges) |
 | `sync EMAIL` | Sync only new/changed messages |
 | `tui` | Launch the interactive TUI (`--account` to filter, `--local` to force local) |
@@ -103,28 +101,15 @@ msgvault tui
 
 See the [CLI Reference](https://msgvault.io/cli-reference/) for full details.
 
-## Microsoft 365 / Outlook.com
+## Vector Search
 
-Archive email from Outlook.com personal accounts or Microsoft 365 organizational accounts using OAuth2.
+msgvault can search your archive semantically using vector embeddings in addition to the default FTS5 keyword search. Point it at a self-hosted OpenAI-compatible embedding endpoint (Ollama, llama.cpp, LM Studio) and three surfaces accept either pure semantic search or BM25+vector fused via Reciprocal Rank Fusion:
 
-**Prerequisites:** Register an Azure AD app with IMAP access. See the [Microsoft 365 Setup Guide](https://msgvault.io/guides/o365-setup/) for step-by-step instructions (~5 minutes).
+- **CLI:** `msgvault search "..." --mode vector` or `--mode hybrid`
+- **HTTP:** `GET /api/v1/search?q=...&mode=vector` or `mode=hybrid`
+- **MCP:** the `search_messages` tool with a `mode` argument set to `vector` or `hybrid`
 
-Add the client ID to your config:
-
-```toml
-# ~/.msgvault/config.toml
-[microsoft]
-client_id = "your-azure-app-client-id"
-```
-
-Then add and sync:
-
-```bash
-msgvault add-o365 user@outlook.com              # opens browser for OAuth
-msgvault add-o365 user@company.com --headless    # device code flow for SSH
-msgvault add-o365 user@company.com --tenant TENANT_ID  # specific Azure AD tenant
-msgvault sync-full user@outlook.com
-```
+A separate MCP tool, `find_similar_messages`, returns nearest neighbors for a seed message. See the [Vector Search guide](https://msgvault.io/usage/vector-search/) for setup, backfill, and troubleshooting.
 
 ## Importing from MBOX or Apple Mail
 
@@ -146,9 +131,6 @@ All data lives in `~/.msgvault/` by default (override with `MSGVAULT_HOME`).
 # ~/.msgvault/config.toml
 [oauth]
 client_secrets = "/path/to/client_secret.json"
-
-[microsoft]
-client_id = "your-azure-ad-app-client-id"
 
 [sync]
 rate_limit_qps = 5
@@ -208,7 +190,7 @@ bind_addr = "0.0.0.0"
 api_key = "your-secret-key"
 ```
 
-The TUI can connect to a remote server by configuring `[remote].url`. Use `--local` to force local database when remote is configured. See [docs/api.md](docs/api.md) for the HTTP API reference.
+The TUI can connect to a remote server by configuring `[remote].url`. Use `--local` to force local database when remote is configured. See the [Web Server reference](https://msgvault.io/api-server/) for the HTTP API.
 
 ## Documentation
 
@@ -232,10 +214,13 @@ Join the [msgvault Discord](https://discord.gg/fDnmxB8Wkq) to ask questions, sha
 ```bash
 git clone https://github.com/wesm/msgvault.git
 cd msgvault
+make install-hooks  # install pre-commit hook (requires prek)
 make test           # run tests
-make lint           # run linter
+make lint           # run linter (auto-fix)
 make install        # build and install
 ```
+
+Pre-commit hooks are managed by [prek](https://prek.j178.dev/) (`brew install prek`).
 
 ## License
 

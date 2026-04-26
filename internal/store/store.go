@@ -2,15 +2,18 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mutecomm/go-sqlcipher/v4"
 )
@@ -19,9 +22,17 @@ import (
 var schemaFS embed.FS
 
 // Store provides database operations for msgvault.
+//
+// The db field wraps a *sql.DB with a thin logging adapter that
+// emits slog records for every Query / Exec / QueryRow call.
+// Because loggedDB embeds *sql.DB and overrides the instrumented
+// methods, existing store code that does s.db.Query(...) compiles
+// unchanged and automatically routes through the logger.
 type Store struct {
-	db            *sql.DB
+	db            *loggedDB
 	dbPath        string
+	dialect       Dialect
+	readOnly      bool     // Opened via OpenReadOnly; skips WAL checkpoint on close
 	fts5Available bool     // Whether FTS5 is available for full-text search
 	lockFile      *os.File // Advisory lock file
 	passphrase    string   // Stored for backup operations that need to reopen the DB
@@ -47,6 +58,9 @@ func WithPassphrase(passphrase string) OpenOption {
 // This is more robust than strings.Contains on err.Error() because it first
 // type-asserts to the specific driver error type using errors.As.
 // Handles both value (sqlite3.Error) and pointer (*sqlite3.Error) forms.
+//
+// SQLiteDialect's error predicates are thin wrappers around this helper; it also
+// services subset.go (which has not been migrated to Dialect).
 func isSQLiteError(err error, substr string) bool {
 	var sqliteErr sqlite3.Error
 	if errors.As(err, &sqliteErr) {
@@ -66,10 +80,12 @@ func Open(dbPath string, opts ...OpenOption) (*Store, error) {
 		opt(&cfg)
 	}
 
-	// Ensure directory exists
-	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("create db directory: %w", err)
+	// Ensure directory exists (skip for in-memory databases)
+	if dbPath != ":memory:" && !strings.Contains(dbPath, ":memory:") {
+		dir := filepath.Dir(dbPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("create db directory: %w", err)
+		}
 	}
 
 	// Build DSN with optional encryption passphrase
@@ -86,25 +102,42 @@ func Open(dbPath string, opts ...OpenOption) (*Store, error) {
 
 	// Test connection (will fail if wrong passphrase)
 	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("open database (wrong passphrase?): %w", err)
+		_ = db.Close()
+		if cfg.passphrase != "" {
+			return nil, fmt.Errorf("open database (wrong passphrase?): %w", err)
+		}
+		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
 	// Additional verification for encrypted databases
 	if cfg.passphrase != "" {
 		if _, err := db.Exec("SELECT count(*) FROM sqlite_master"); err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, fmt.Errorf("database passphrase verification failed: %w", err)
 		}
 	}
 
-	// SQLite is single-writer; one connection eliminates
-	// cross-connection visibility issues with FK checks.
-	db.SetMaxOpenConns(1)
+	// SQLite with WAL supports one writer + multiple readers.
+	// Allow enough connections for concurrent reads (TUI async
+	// queries, FTS backfill) while SQLite handles write serialization.
+	// Exception: :memory: databases are per-connection, so multiple
+	// connections would create separate databases.
+	if dbPath == ":memory:" || strings.Contains(dbPath, ":memory:") {
+		db.SetMaxOpenConns(1)
+	} else {
+		db.SetMaxOpenConns(4)
+	}
+
+	dialect := &SQLiteDialect{}
+	if err := dialect.InitConn(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("init connection: %w", err)
+	}
 
 	store := &Store{
-		db:         db,
+		db:         newLoggedDB(db, dialect.Rebind),
 		dbPath:     dbPath,
+		dialect:    dialect,
 		passphrase: cfg.passphrase,
 	}
 
@@ -133,13 +166,62 @@ func (s *Store) tryLock() {
 	s.lockFile = f
 }
 
-// Close checkpoints the WAL, closes the database connection, and releases
-// the advisory lock.
+// OpenReadOnly opens an existing database in read-only mode. Suitable for
+// query-only workloads (MCP server) where multiple processes access the
+// same database concurrently. Does not create the database, run migrations,
+// or checkpoint WAL on close.
+func OpenReadOnly(dbPath string) (*Store, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf(
+			"database not found: %s "+
+				"(run 'msgvault init-db' first)", dbPath,
+		)
+	}
+
+	// Use _query_only instead of mode=ro. WAL-mode databases may need
+	// to create or update -wal/-shm sidecar files on open, which fails
+	// under SQLITE_OPEN_READONLY. _query_only opens normally (so SQLite
+	// can manage sidecars) but rejects all write SQL at the query layer.
+	dsn := dbPath + "?_query_only=true&_busy_timeout=5000"
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open database (read-only): %w", err)
+	}
+
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("ping database: %w", err)
+	}
+
+	db.SetMaxOpenConns(4)
+
+	dialect := &SQLiteDialect{}
+	if err := dialect.InitConn(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("init connection: %w", err)
+	}
+
+	s := &Store{
+		db:       newLoggedDB(db, dialect.Rebind),
+		dbPath:   dbPath,
+		dialect:  dialect,
+		readOnly: true,
+	}
+
+	s.fts5Available = dialect.FTSAvailable(db)
+
+	return s, nil
+}
+
+// Close checkpoints the WAL (unless read-only), releases the advisory lock,
+// and closes the database connection.
 func (s *Store) Close() error {
-	// Checkpoint WAL before closing to fold it back into the main database.
-	// This prevents WAL accumulation across sessions and reduces the risk of
-	// corruption from stale WAL entries.
-	_ = s.CheckpointWAL()
+	if !s.readOnly {
+		// Checkpoint WAL before closing to fold it back into the main
+		// database. This prevents WAL accumulation across sessions and
+		// reduces the risk of corruption from stale WAL entries.
+		_ = s.CheckpointWAL()
+	}
 	if s.lockFile != nil {
 		syscall.Flock(int(s.lockFile.Fd()), syscall.LOCK_UN)
 		s.lockFile.Close()
@@ -152,26 +234,18 @@ func (s *Store) Close() error {
 // CheckpointWAL forces a WAL checkpoint, folding the WAL back into the main
 // database file. Uses TRUNCATE mode which also resets the WAL file to zero
 // bytes. Returns nil on success; callers may log but should not fail on error.
+// No-op for non-SQLite backends.
 func (s *Store) CheckpointWAL() error {
-	var busy, log, checkpointed int
-	err := s.db.QueryRow(
-		"PRAGMA wal_checkpoint(TRUNCATE)",
-	).Scan(&busy, &log, &checkpointed)
-	if err != nil {
-		return err
-	}
-	if busy != 0 {
-		return fmt.Errorf(
-			"WAL checkpoint incomplete: database busy "+
-				"(log=%d, checkpointed=%d)", log, checkpointed,
-		)
-	}
-	return nil
+	return s.dialect.CheckpointWAL(s.db.DB)
 }
 
-// DB returns the underlying database connection for advanced queries.
+// DB returns the underlying *sql.DB for consumers that need to
+// pass the raw handle elsewhere (e.g. the DuckDB engine's
+// sqlite_scan wrapper). The wrapper's structured-logging
+// behaviour is bypassed for those consumers — they're operating
+// at a different abstraction layer.
 func (s *Store) DB() *sql.DB {
-	return s.db
+	return s.db.DB
 }
 
 // DBPath returns the path to the SQLite database file.
@@ -184,25 +258,95 @@ func (s *Store) Passphrase() string {
 	return s.passphrase
 }
 
+// WithExclusiveLock executes fn while holding an exclusive write lock on the
+// database. In WAL mode this blocks concurrent writers (e.g. StartSync) while
+// allowing reads (e.g. IsAttachmentPathReferenced) to proceed. Use this to
+// serialize destructive file operations against concurrent sync attachment
+// ingestion. The context controls both lock acquisition and the lifetime of
+// the underlying connection; cancelling it aborts a pending BEGIN EXCLUSIVE
+// and rolls back any held transaction.
+func (s *Store) WithExclusiveLock(ctx context.Context, fn func() error) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN EXCLUSIVE"); err != nil {
+		return fmt.Errorf("begin exclusive: %w", err)
+	}
+
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	if err := fn(); err != nil {
+		return err
+	}
+
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit exclusive: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // withTx executes fn within a database transaction. If fn returns an error,
-// the transaction is rolled back; otherwise it is committed.
-func (s *Store) withTx(fn func(tx *sql.Tx) error) error {
+// the transaction is rolled back; otherwise it is committed. The callback
+// receives *loggedTx so every statement inside the transaction goes through
+// the dialect's Rebind automatically.
+func (s *Store) withTx(fn func(tx *loggedTx) error) error {
+	start := time.Now()
+	slog.Debug("sql tx begin")
 	tx, err := s.db.Begin()
 	if err != nil {
+		slog.Warn("sql tx begin failed", "error", err.Error())
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
+		if rbErr := tx.Rollback(); rbErr != nil {
+			slog.Warn("sql tx rollback failed",
+				"error", rbErr.Error(),
+				"fn_error", err.Error(),
+				"duration_ms", time.Since(start).Milliseconds())
+		} else {
+			slog.Info("sql tx rollback",
+				"reason", err.Error(),
+				"duration_ms", time.Since(start).Milliseconds())
+		}
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		slog.Warn("sql tx commit failed",
+			"error", err.Error(),
+			"duration_ms", time.Since(start).Milliseconds())
+		return err
+	}
+	ms := time.Since(start).Milliseconds()
+	if slowMs := sqlLogSlowMs.Load(); slowMs > 0 && ms >= slowMs {
+		slog.Warn("sql tx slow", "duration_ms", ms)
+	} else {
+		slog.Debug("sql tx commit", "duration_ms", ms)
+	}
+	return nil
 }
 
 // queryInChunks executes a parameterized IN-query in chunks to stay within
 // SQLite's parameter limit. queryTemplate must contain a single %s placeholder
 // for the comma-separated "?" list. The prefix args are prepended before each
 // chunk's args (e.g., a source_id filter).
-func queryInChunks[T any](db *sql.DB, ids []T, prefixArgs []interface{}, queryTemplate string, fn func(*sql.Rows) error) error {
+// chunkQuerier abstracts the subset of *sql.DB that queryInChunks
+// and execInChunks actually use, so the helpers accept either a
+// raw *sql.DB (tests) or the logging wrapper (production path).
+type chunkQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func queryInChunks[T any](db chunkQuerier, ids []T, prefixArgs []interface{}, queryTemplate string, fn func(*sql.Rows) error) error {
 	const chunkSize = 500
 	for i := 0; i < len(ids); i += chunkSize {
 		end := i + chunkSize
@@ -227,11 +371,11 @@ func queryInChunks[T any](db *sql.DB, ids []T, prefixArgs []interface{}, queryTe
 
 		for rows.Next() {
 			if err := fn(rows); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return err
 			}
 		}
-		rows.Close()
+		_ = rows.Close()
 		if err := rows.Err(); err != nil {
 			return err
 		}
@@ -239,27 +383,39 @@ func queryInChunks[T any](db *sql.DB, ids []T, prefixArgs []interface{}, queryTe
 	return nil
 }
 
+// chunkInsert describes a multi-row INSERT for insertInChunks.
+// Prefix is everything up to "VALUES ", suffix is anything after the values
+// (e.g. " ON CONFLICT DO NOTHING" for PostgreSQL). ValuesPerRow counts the
+// parameters in one row's tuple (used to stay under the driver's parameter
+// limit).
+type chunkInsert struct {
+	totalRows    int
+	valuesPerRow int
+	prefix       string
+	suffix       string
+}
+
 // insertInChunks executes a multi-value INSERT in chunks to stay within SQLite's
-// parameter limit (999). The valuesPerRow specifies how many parameters are in
-// each VALUES tuple (e.g., 4 for "(?, ?, ?, ?)"). The valueBuilder function
-// generates the VALUES placeholders and args for each chunk of indices.
-func insertInChunks(tx *sql.Tx, totalRows int, valuesPerRow int, queryPrefix string, valueBuilder func(start, end int) ([]string, []interface{})) error {
+// parameter limit (999). valueBuilder generates the VALUES placeholders and
+// args for each chunk of row indices. Rebinding to the dialect's placeholder
+// form happens inside tx.Exec (loggedTx wraps the dialect's Rebind).
+func insertInChunks(tx *loggedTx, c chunkInsert, valueBuilder func(start, end int) ([]string, []interface{})) error {
 	// SQLite default SQLITE_MAX_VARIABLE_NUMBER is 999
 	// Leave some margin for safety
 	const maxParams = 900
-	chunkSize := maxParams / valuesPerRow
+	chunkSize := maxParams / c.valuesPerRow
 	if chunkSize < 1 {
 		chunkSize = 1
 	}
 
-	for i := 0; i < totalRows; i += chunkSize {
+	for i := 0; i < c.totalRows; i += chunkSize {
 		end := i + chunkSize
-		if end > totalRows {
-			end = totalRows
+		if end > c.totalRows {
+			end = c.totalRows
 		}
 
 		values, args := valueBuilder(i, end)
-		query := queryPrefix + strings.Join(values, ",")
+		query := c.prefix + strings.Join(values, ",") + c.suffix
 		if _, err := tx.Exec(query, args...); err != nil {
 			return err
 		}
@@ -271,7 +427,7 @@ func insertInChunks(tx *sql.Tx, totalRows int, valuesPerRow int, queryPrefix str
 // to stay within SQLite's parameter limit. queryTemplate must contain a single %s
 // placeholder for the comma-separated "?" list. The prefix args are prepended before
 // each chunk's args (e.g., a message_id filter).
-func execInChunks[T any](db *sql.DB, ids []T, prefixArgs []interface{}, queryTemplate string) error {
+func execInChunks[T any](db chunkQuerier, ids []T, prefixArgs []interface{}, queryTemplate string) error {
 	const chunkSize = 500
 	for i := 0; i < len(ids); i += chunkSize {
 		end := i + chunkSize
@@ -297,9 +453,10 @@ func execInChunks[T any](db *sql.DB, ids []T, prefixArgs []interface{}, queryTem
 }
 
 // Rebind converts a query with ? placeholders to the appropriate format
-// for the current database driver.
+// for the current database driver. No-op for SQLite; converts to $1, $2, ...
+// for PostgreSQL.
 func (s *Store) Rebind(query string) string {
-	return query
+	return s.dialect.Rebind(query)
 }
 
 // FTS5Available returns whether FTS5 full-text search is available.
@@ -340,17 +497,43 @@ func (s *Store) migrateAddContentID() error {
 	return nil
 }
 
+// IsBusyError reports whether err indicates another process holds the
+// database (SQLITE_BUSY or SQLITE_LOCKED). Callers running maintenance
+// operations that need exclusive access can use this to produce a
+// user-actionable "stop other processes and retry" message.
+func (s *Store) IsBusyError(err error) bool {
+	return s.dialect.IsBusyError(err)
+}
+
+// SchemaStale checks whether the database schema is missing columns
+// added by recent migrations. Returns (stale, column, err). Only
+// reports stale when the query succeeds and the column is absent;
+// query errors are returned separately so callers don't misdiagnose
+// corruption or permission problems as outdated schema.
+func (s *Store) SchemaStale() (bool, string, error) {
+	var count int
+	err := s.db.QueryRow(s.dialect.SchemaStaleCheck()).Scan(&count)
+	if err != nil {
+		return false, "", fmt.Errorf("check schema version: %w", err)
+	}
+	if count == 0 {
+		return true, "conversations.conversation_type", nil
+	}
+	return false, "", nil
+}
+
 // InitSchema initializes the database schema.
 // This creates all tables if they don't exist.
 func (s *Store) InitSchema() error {
-	// Load and execute main schema
-	schema, err := schemaFS.ReadFile("schema.sql")
-	if err != nil {
-		return fmt.Errorf("read schema.sql: %w", err)
-	}
-
-	if _, err := s.db.Exec(string(schema)); err != nil {
-		return fmt.Errorf("execute schema.sql: %w", err)
+	// Load and execute schema files provided by the dialect.
+	for _, filename := range s.dialect.SchemaFiles() {
+		schema, err := schemaFS.ReadFile(filename)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", filename, err)
+		}
+		if _, err := s.db.Exec(string(schema)); err != nil {
+			return fmt.Errorf("execute %s: %w", filename, err)
+		}
 	}
 
 	// Migrate existing databases to add content_id column if missing
@@ -359,8 +542,7 @@ func (s *Store) InitSchema() error {
 	}
 
 	// Migrations: add columns for databases created before these features.
-	// SQLite returns "duplicate column name" if the column already exists,
-	// which we treat as success.
+	// The dialect determines whether a "duplicate column" error is benign.
 	for _, m := range []struct {
 		sql  string
 		desc string
@@ -368,9 +550,18 @@ func (s *Store) InitSchema() error {
 		{`ALTER TABLE sources ADD COLUMN sync_config JSON`, "sync_config"},
 		{`ALTER TABLE messages ADD COLUMN rfc822_message_id TEXT`, "rfc822_message_id"},
 		{`ALTER TABLE sources ADD COLUMN oauth_app TEXT`, "oauth_app"},
+		{`ALTER TABLE participants ADD COLUMN phone_number TEXT`, "phone_number"},
+		{`ALTER TABLE participants ADD COLUMN canonical_id TEXT`, "canonical_id"},
+		{`ALTER TABLE messages ADD COLUMN sender_id INTEGER REFERENCES participants(id)`, "sender_id"},
+		{`ALTER TABLE messages ADD COLUMN message_type TEXT NOT NULL DEFAULT 'email'`, "message_type"},
+		{`ALTER TABLE messages ADD COLUMN attachment_count INTEGER DEFAULT 0`, "attachment_count"},
+		{`ALTER TABLE messages ADD COLUMN deleted_from_source_at DATETIME`, "deleted_from_source_at"},
+		{`ALTER TABLE messages ADD COLUMN delete_batch_id TEXT`, "delete_batch_id"},
+		{`ALTER TABLE conversations ADD COLUMN title TEXT`, "title"},
+		{`ALTER TABLE conversations ADD COLUMN conversation_type TEXT NOT NULL DEFAULT 'email_thread'`, "conversation_type"},
 	} {
 		if _, err := s.db.Exec(m.sql); err != nil {
-			if !isSQLiteError(err, "duplicate column name") {
+			if !s.dialect.IsDuplicateColumnError(err) {
 				return fmt.Errorf("migrate schema (%s): %w", m.desc, err)
 			}
 		}
@@ -382,45 +573,35 @@ func (s *Store) InitSchema() error {
 		return fmt.Errorf("init vector table: %w", err)
 	}
 
-	// Try to load and execute SQLite-specific schema (FTS5)
-	// This is optional - FTS5 may not be available in all builds
-	sqliteSchema, err := schemaFS.ReadFile("schema_sqlite.sql")
-	if err != nil {
-		return fmt.Errorf("read schema_sqlite.sql: %w", err)
-	}
-
-	if _, err := s.db.Exec(string(sqliteSchema)); err != nil {
-		if isSQLiteError(err, "no such module: fts5") {
-			s.fts5Available = false
-		} else {
-			return fmt.Errorf("init fts5 schema: %w", err)
+	// Load the optional FTS schema, if the dialect keeps one separate.
+	// PostgreSQL returns "" here because its tsvector lives in the main schema.
+	if ftsFile := s.dialect.SchemaFTS(); ftsFile != "" {
+		ftsSchema, err := schemaFS.ReadFile(ftsFile)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", ftsFile, err)
 		}
-	} else {
-		s.fts5Available = true
+		if _, err := s.db.Exec(string(ftsSchema)); err != nil {
+			if !s.dialect.IsNoSuchModuleError(err) {
+				return fmt.Errorf("init FTS schema: %w", err)
+			}
+			// Module not compiled in; availability stays false.
+			s.fts5Available = false
+			return nil
+		}
 	}
 
+	// Probe availability through the dialect so it works uniformly for
+	// backends that carry FTS inside their main schema.
+	s.fts5Available = s.dialect.FTSAvailable(s.db.DB)
 	return nil
 }
 
-// NeedsFTSBackfill reports whether the FTS table needs to be populated.
-// Uses MAX(id) comparisons (instant B-tree lookups) instead of COUNT(*)
-// to avoid full table scans on large databases.
+// NeedsFTSBackfill reports whether the FTS index needs to be populated.
 func (s *Store) NeedsFTSBackfill() bool {
 	if !s.fts5Available {
 		return false
 	}
-	var msgMax int64
-	if err := s.db.QueryRow("SELECT COALESCE(MAX(id), 0) FROM messages").Scan(&msgMax); err != nil || msgMax == 0 {
-		return false
-	}
-	var ftsMax int64
-	if err := s.db.QueryRow("SELECT COALESCE(MAX(rowid), 0) FROM messages_fts").Scan(&ftsMax); err != nil {
-		return false
-	}
-	// Backfill needed if FTS hasn't reached near the end of the messages table.
-	// Using subtraction (msgMax - msgMax/10) instead of multiplication (msgMax*9/10)
-	// ensures the threshold is at least msgMax for small values (e.g., msgMax=1).
-	return ftsMax < msgMax-msgMax/10
+	return s.dialect.FTSNeedsBackfill(s.db.DB)
 }
 
 // Stats holds database statistics.
@@ -450,7 +631,7 @@ func (s *Store) GetStats() (*Stats, error) {
 
 	for _, q := range queries {
 		if err := s.db.QueryRow(q.query).Scan(q.dest); err != nil {
-			if isSQLiteError(err, "no such table") {
+			if s.dialect.IsNoSuchTableError(err) {
 				continue
 			}
 			return nil, fmt.Errorf("get stats %q: %w", q.query, err)

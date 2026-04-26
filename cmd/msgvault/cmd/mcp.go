@@ -34,22 +34,31 @@ Add to Claude Desktop config:
   }`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+
+		// Open read-only: MCP is a query-only workload. This avoids
+		// SQLite write-lock contention when multiple MCP processes
+		// (one per Claude Code session) access the same database.
+		// Schema migrations and FTS backfill are write operations
+		// handled by init-db / sync / tui — not by MCP.
+		s, err := store.OpenReadOnly(dbPath)
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
-		// Ensure schema is up to date
-		if err := s.InitSchema(); err != nil {
-			return fmt.Errorf("init schema: %w", err)
+		if stale, col, err := s.SchemaStale(); err != nil {
+			return fmt.Errorf("check schema: %w", err)
+		} else if stale {
+			return fmt.Errorf(
+				"database schema is outdated (missing %s); "+
+					"run 'msgvault init-db' to update", col)
 		}
 
-		// Build FTS index in background — MCP should start serving immediately
-		if s.NeedsFTSBackfill() {
-			go func() {
-				_, _ = s.BackfillFTS(nil)
-			}()
+		if s.FTS5Available() && s.NeedsFTSBackfill() {
+			fmt.Fprintf(os.Stderr,
+				"Warning: full-text search index needs populating; "+
+					"body-text search will return incomplete results "+
+					"until 'msgvault tui' or 'msgvault search' is run\n")
 		}
 
 		var engine query.Engine
@@ -67,7 +76,7 @@ Add to Claude Desktop config:
 				engine = query.NewSQLiteEngine(s.DB())
 			} else {
 				engine = duckEngine
-				defer duckEngine.Close()
+				defer func() { _ = duckEngine.Close() }()
 			}
 		} else {
 			engine = query.NewSQLiteEngine(s.DB())
@@ -76,7 +85,33 @@ Add to Claude Desktop config:
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		return mcpserver.Serve(ctx, engine, cfg.AttachmentsDir(), cfg.Data.DataDir)
+		// Build optional vector-search components. MCP runs as a
+		// query-only server, so the worker and enqueuer fields go
+		// unused — only Backend, HybridEngine, and VectorCfg reach
+		// the MCP layer.
+		vf, err := setupVectorFeatures(ctx, s.DB(), dbPath)
+		if err != nil {
+			return fmt.Errorf("vector features: %w", err)
+		}
+		defer func() {
+			if vf != nil && vf.Close != nil {
+				if closeErr := vf.Close(); closeErr != nil {
+					logger.Warn("closing vectors.db failed", "error", closeErr)
+				}
+			}
+		}()
+
+		opts := mcpserver.ServeOptions{
+			Engine:         engine,
+			AttachmentsDir: cfg.AttachmentsDir(),
+			DataDir:        cfg.Data.DataDir,
+		}
+		if vf != nil {
+			opts.HybridEngine = vf.HybridEngine
+			opts.Backend = vf.Backend
+			opts.VectorCfg = vf.Cfg
+		}
+		return mcpserver.ServeWithOptions(ctx, opts)
 	},
 }
 

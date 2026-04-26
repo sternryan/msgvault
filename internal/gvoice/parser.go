@@ -6,12 +6,12 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"net/mail"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/wesm/msgvault/internal/textimport"
 	"golang.org/x/net/html"
 )
 
@@ -105,7 +105,10 @@ func parseVCF(data []byte) (ownerPhones, error) {
 		}
 
 		if strings.HasPrefix(line, "TEL;TYPE=CELL:") {
-			phones.Cell = normalizePhone(strings.TrimPrefix(line, "TEL;TYPE=CELL:"))
+			raw := strings.TrimPrefix(line, "TEL;TYPE=CELL:")
+			if p, err := textimport.NormalizePhone(raw); err == nil {
+				phones.Cell = p
+			}
 		}
 	}
 
@@ -113,14 +116,16 @@ func parseVCF(data []byte) (ownerPhones, error) {
 	for prefix, label := range itemLabels {
 		if label == "Google Voice" {
 			if tel, ok := itemTels[prefix]; ok {
-				phones.GoogleVoice = normalizePhone(tel)
+				if p, err := textimport.NormalizePhone(tel); err == nil {
+					phones.GoogleVoice = p
+				}
 				break
 			}
 		}
 	}
 
 	if phones.GoogleVoice == "" {
-		return phones, fmt.Errorf("Google Voice number not found in VCF")
+		return phones, fmt.Errorf("google Voice number not found in VCF")
 	}
 
 	return phones, scanner.Err()
@@ -145,8 +150,10 @@ func parseTextHTML(r io.Reader) ([]textMessage, []string, error) {
 				if link.Type == html.ElementNode && link.Data == "a" && hasClass(link, "tel") {
 					href := getAttr(link, "href")
 					if strings.HasPrefix(href, "tel:") {
-						phone := normalizePhone(strings.TrimPrefix(href, "tel:"))
-						groupParticipants = append(groupParticipants, phone)
+						raw := strings.TrimPrefix(href, "tel:")
+						if p, err := textimport.NormalizePhone(raw); err == nil {
+							groupParticipants = append(groupParticipants, p)
+						}
 					}
 				}
 				return false
@@ -195,7 +202,10 @@ func parseMessageDiv(div *html.Node) textMessage {
 			// Sender phone
 			href := getAttr(n, "href")
 			if strings.HasPrefix(href, "tel:") {
-				msg.SenderPhone = normalizePhone(strings.TrimPrefix(href, "tel:"))
+				raw := strings.TrimPrefix(href, "tel:")
+				if p, err := textimport.NormalizePhone(raw); err == nil {
+					msg.SenderPhone = p
+				}
 			}
 			// Sender name from child <span class="fn"> or <abbr class="fn">
 			walkNodes(n, func(child *html.Node) bool {
@@ -250,7 +260,7 @@ func extractQBody(q *html.Node) string {
 			b.WriteString(c.Data)
 		case c.Type == html.ElementNode && c.Data == "br":
 			// Trailing <br> in GV HTML — only add newline if there's more content after
-			if c.NextSibling != nil && !(c.NextSibling.Type == html.TextNode && strings.TrimSpace(c.NextSibling.Data) == "") {
+			if c.NextSibling != nil && (c.NextSibling.Type != html.TextNode || strings.TrimSpace(c.NextSibling.Data) != "") {
 				b.WriteString("\n")
 			}
 		case c.Type == html.ElementNode:
@@ -299,7 +309,10 @@ func parseCallHTML(r io.Reader) (*callRecord, error) {
 						if link.Type == html.ElementNode && link.Data == "a" && hasClass(link, "tel") {
 							href := getAttr(link, "href")
 							if strings.HasPrefix(href, "tel:") {
-								record.Phone = normalizePhone(strings.TrimPrefix(href, "tel:"))
+								raw := strings.TrimPrefix(href, "tel:")
+								if p, err := textimport.NormalizePhone(raw); err == nil {
+									record.Phone = p
+								}
 							}
 							walkNodes(link, func(fn *html.Node) bool {
 								if fn.Type == html.ElementNode && fn.Data == "span" && hasClass(fn, "fn") {
@@ -364,90 +377,6 @@ func parseCallHTML(r io.Reader) (*callRecord, error) {
 	return record, nil
 }
 
-// normalizePhone strips non-digit characters from a phone number and attempts
-// to produce a consistent E.164-like format.
-func normalizePhone(phone string) string {
-	hasPlus := strings.HasPrefix(phone, "+")
-
-	var digits strings.Builder
-	for _, r := range phone {
-		if r >= '0' && r <= '9' {
-			digits.WriteRune(r)
-		}
-	}
-	d := digits.String()
-	if d == "" {
-		return phone
-	}
-
-	if hasPlus {
-		return "+" + d
-	}
-	if len(d) == 10 {
-		return "+1" + d
-	}
-	if len(d) == 11 && d[0] == '1' {
-		return "+" + d
-	}
-	return "+" + d
-}
-
-// normalizeIdentifier converts a phone number into an email-like identifier
-// using the @phone.gvoice domain.
-func normalizeIdentifier(phone string) (email, domain string) {
-	phone = normalizePhone(phone)
-	return phone + "@phone.gvoice", "phone.gvoice"
-}
-
-// buildMIME constructs a minimal RFC 2822 message from Google Voice data.
-func buildMIME(from, to []string, date time.Time, messageID, body string) []byte {
-	var b strings.Builder
-
-	if len(from) > 0 {
-		b.WriteString("From: ")
-		b.WriteString(formatMIMEAddress(from[0]))
-		b.WriteString("\r\n")
-	}
-
-	if len(to) > 0 {
-		b.WriteString("To: ")
-		for i, addr := range to {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(formatMIMEAddress(addr))
-		}
-		b.WriteString("\r\n")
-	}
-
-	if !date.IsZero() {
-		b.WriteString("Date: ")
-		b.WriteString(date.Format(time.RFC1123Z))
-		b.WriteString("\r\n")
-	}
-
-	b.WriteString("Subject: \r\n")
-
-	if messageID != "" {
-		fmt.Fprintf(&b, "Message-ID: <%s@gvoice.local>\r\n", messageID)
-	}
-
-	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
-	b.WriteString("\r\n")
-
-	if body != "" {
-		b.WriteString(body)
-	}
-
-	return []byte(b.String())
-}
-
-// formatMIMEAddress formats an email address for MIME headers.
-func formatMIMEAddress(addr string) string {
-	return (&mail.Address{Address: addr}).String()
-}
-
 // snippet returns the first n characters of s, suitable for message preview.
 func snippet(s string, maxLen int) string {
 	s = strings.Join(strings.Fields(s), " ")
@@ -469,13 +398,13 @@ func computeMessageID(parts ...string) string {
 // For group texts, uses "group:" + sorted(all participant phones).
 // For calls, uses "calls:" + normalizedPhone.
 func computeThreadID(ownerCell string, ft fileType, contactPhone string, groupParticipants []string) string {
-	switch {
-	case ft == fileTypeGroup:
+	switch ft {
+	case fileTypeGroup:
 		phones := make([]string, len(groupParticipants))
 		copy(phones, groupParticipants)
 		sort.Strings(phones)
 		return "group:" + strings.Join(phones, ",")
-	case ft == fileTypeReceived || ft == fileTypePlaced || ft == fileTypeMissed || ft == fileTypeVoicemail:
+	case fileTypeReceived, fileTypePlaced, fileTypeMissed, fileTypeVoicemail:
 		return "calls:" + contactPhone
 	default:
 		// 1:1 text — use the other party's phone
