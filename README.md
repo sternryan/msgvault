@@ -102,6 +102,79 @@ msgvault tui
 
 See the [CLI Reference](https://msgvault.io/cli-reference/) for full details.
 
+## Triage pipeline (cross-repo with forge)
+
+Score archived Gmail against the [forge](https://github.com/quartermint/forge) knowledge graph and surface a weekly digest of high-signal candidates for forge ingestion. Pure SQL + regex + lexical scoring — **no LLM/encoder calls in the hot path**.
+
+### `msgvault triage`
+
+Reads forge `graph.db` and `sources.db` read-only, scores each message in the lookback window via a 7-criterion composite (vocab 0.25, url_gold 0.20, curiosity 0.15, recurrence 0.15, bridge 0.10, decision 0.10, expert 0.05), applies hard filters (List-Unsubscribe, calendar invites, receipts, 2FA, large bcc threads, short messages without URL signal), and emits the top-N candidates above threshold ≥0.55 as JSONL.
+
+```bash
+msgvault triage \
+    --since 7d \
+    --out /tmp/triage.jsonl \
+    --forge-graph /opt/services/forge/graph.db \
+    --forge-sources /opt/services/forge/sources.db \
+    --trusted-contacts trusted_contacts.toml \
+    --user-email ryan@example.com
+```
+
+Output is byte-identical for byte-identical inputs (deterministic sort: `score DESC, date DESC, message_id ASC`).
+
+### `msgvault trusted-contacts bootstrap`
+
+Generate the static seed TOML for criterion #3 / #7 weighting. Top-N senders by total inbound + outbound message volume over the lookback window, with a noise-domain allowlist excluded.
+
+```bash
+msgvault trusted-contacts bootstrap --top 10 --out trusted_contacts.toml
+```
+
+A missing `trusted_contacts.toml` makes `triage` log a warning and continue with degraded scoring (criterion #3 returns 0.2, criterion #7 returns 0.0).
+
+### `msgvault digest send`
+
+Send the weekly markdown digest email via the existing Gmail OAuth.
+
+**One-time setup:** the `gmail.send` scope is NEW. Existing tokens have only `gmail.readonly + gmail.modify`, so you must re-grant interactively before enabling the launchd cron:
+
+```bash
+msgvault add-account --reauth --scopes=triage <your-email>
+```
+
+Then send (use `--dry-run` to print the email to stdout without hitting Gmail):
+
+```bash
+msgvault digest send \
+    --in /tmp/triage.jsonl \
+    --to ryan@example.com \
+    --from ryan@example.com \
+    --account ryan@example.com
+```
+
+Each digest row is numbered 1..N matching the JSONL row index, so the recipient can scan the email, note row numbers, and approve via `forge ingest --from-triage <jsonl> --select 1,3,7` on the forge side.
+
+### Weekly cron (Mac Mini)
+
+A launchd plist at `launchd/com.msgvault.triage-digest.plist` runs the full `triage` → `digest send` pipeline every Monday 07:00 PT:
+
+```bash
+sudo cp launchd/com.msgvault.triage-digest.plist /Library/LaunchDaemons/
+cp launchd/run-triage.sh /opt/services/msgvault/run-triage.sh
+chmod +x /opt/services/msgvault/run-triage.sh
+launchctl bootstrap gui/$(id -u) /Library/LaunchDaemons/com.msgvault.triage-digest.plist
+```
+
+Required env in `/opt/services/msgvault/.env`:
+
+```
+DIGEST_TO_ADDR=ryan@example.com
+DIGEST_FROM_ADDR=ryan@example.com
+MSGVAULT_ACCOUNT=ryan@example.com
+```
+
+The launchd plist deliberately omits `ProcessType` — setting it to `Background` causes macOS to suspend the service unpredictably (see Mac Mini operational notes).
+
 ## Vector Search
 
 msgvault can search your archive semantically using vector embeddings in addition to the default FTS5 keyword search. Point it at a self-hosted OpenAI-compatible embedding endpoint (Ollama, llama.cpp, LM Studio) and three surfaces accept either pure semantic search or BM25+vector fused via Reciprocal Rank Fusion:
