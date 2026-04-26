@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -22,10 +23,18 @@ func WithLogger(logger *slog.Logger) Option {
 	return func(c *Client) { c.logger = logger }
 }
 
-// WithTokenSource sets a callback that provides fresh XOAUTH2 access tokens.
-// Required when Config.AuthMethod is "xoauth2".
-func WithTokenSource(fn func(context.Context) (string, error)) Option {
+// WithTokenSource sets a callback that provides OAuth2 access tokens
+// for XOAUTH2 SASL authentication. Required when Config.AuthMethod is AuthXOAuth2.
+func WithTokenSource(fn func(ctx context.Context) (string, error)) Option {
 	return func(c *Client) { c.tokenSource = fn }
+}
+
+// WithDateFilter restricts IMAP SEARCH to messages within the given date range.
+func WithDateFilter(since, before time.Time) Option {
+	return func(c *Client) {
+		c.since = since
+		c.before = before
+	}
 }
 
 // fetchChunkSize is the maximum number of UIDs per UID FETCH command.
@@ -39,11 +48,10 @@ const listPageSize = 500
 
 // Client implements gmail.API for IMAP servers.
 type Client struct {
-	config   *Config
-	password string
-	logger   *slog.Logger
-
-	tokenSource func(context.Context) (string, error) // XOAUTH2 token provider
+	config      *Config
+	password    string
+	tokenSource func(ctx context.Context) (string, error) // XOAUTH2 token callback
+	logger      *slog.Logger
 
 	mu               sync.Mutex
 	conn             *imapclient.Client
@@ -55,6 +63,8 @@ type Client struct {
 	allMailFolder    string               // mailbox with \All attribute (empty if not detected)
 	msgIDToLabels    map[string][]string  // RFC822 Message-ID → mailbox memberships
 	seenRFC822IDs    map[string]bool      // dedup across All Mail + Trash/Spam
+	since            time.Time            // IMAP SINCE date filter (zero = no filter)
+	before           time.Time            // IMAP BEFORE date filter (zero = no filter)
 }
 
 // NewClient creates a new IMAP client.
@@ -95,7 +105,17 @@ func (c *Client) connect(ctx context.Context) error {
 		return fmt.Errorf("dial IMAP %s: %w", addr, err)
 	}
 
-	if c.config.EffectiveAuthMethod() == AuthXOAuth2 && c.tokenSource != nil {
+	if err := conn.WaitGreeting(); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("IMAP greeting from %s: %w", addr, err)
+	}
+
+	switch c.config.EffectiveAuthMethod() {
+	case AuthXOAuth2:
+		if c.tokenSource == nil {
+			_ = conn.Close()
+			return fmt.Errorf("XOAUTH2 auth requires a token source (use WithTokenSource)")
+		}
 		token, err := c.tokenSource(ctx)
 		if err != nil {
 			_ = conn.Close()
@@ -104,9 +124,9 @@ func (c *Client) connect(ctx context.Context) error {
 		saslClient := NewXOAuth2Client(c.config.Username, token)
 		if err := conn.Authenticate(saslClient); err != nil {
 			_ = conn.Close()
-			return fmt.Errorf("IMAP XOAUTH2 auth: %w", err)
+			return fmt.Errorf("XOAUTH2 authenticate: %w", err)
 		}
-	} else {
+	default:
 		if err := conn.Login(c.config.Username, c.password).Wait(); err != nil {
 			_ = conn.Close()
 			return fmt.Errorf("IMAP login: %w", err)
@@ -257,8 +277,16 @@ func (c *Client) enumerateMailbox(
 		}
 	}
 
+	criteria := &imap.SearchCriteria{}
+	if !c.since.IsZero() {
+		criteria.Since = c.since
+	}
+	if !c.before.IsZero() {
+		criteria.Before = c.before
+	}
+
 	searchData, err := c.conn.UIDSearch(
-		&imap.SearchCriteria{},
+		criteria,
 		nil,
 	).Wait()
 	if err != nil {
@@ -274,7 +302,7 @@ func (c *Client) enumerateMailbox(
 				return nil, selErr
 			}
 			searchData, err = c.conn.UIDSearch(
-				&imap.SearchCriteria{},
+				criteria,
 				nil,
 			).Wait()
 			if err != nil {
@@ -561,10 +589,7 @@ func (c *Client) ListLabels(ctx context.Context) ([]*gmailapi.Label, error) {
 			return fmt.Errorf("LIST: %w", err)
 		}
 		for _, item := range items {
-			labelType := "user"
-			if item.Mailbox == "INBOX" {
-				labelType = "system"
-			}
+			labelType := classifyLabelType(item.Mailbox, item.Attrs)
 			labels = append(labels, &gmailapi.Label{
 				ID:   item.Mailbox,
 				Name: item.Mailbox,

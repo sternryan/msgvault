@@ -23,8 +23,6 @@ oauth_client*.json
 
 # Local development state
 .beads/
-.githooks/post-commit
-.githooks/post-rewrite
 .mcp.json
 
 # Python
@@ -40,6 +38,10 @@ __pycache__/
 *.swp
 *.swo
 .projects/
+
+# Nix
+.direnv/
+result
 
 # Claude Code
 .claude/

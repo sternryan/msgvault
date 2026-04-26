@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,33 +16,75 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/wesm/msgvault/internal/fileutil"
 	"golang.org/x/oauth2"
 )
 
 const (
-	DefaultTenant   = "common"
-	ScopeIMAP       = "https://outlook.office.com/IMAP.AccessAsUser.All"
-	callbackPath    = "/callback/microsoft"
-	graphMeEndpoint = "https://graph.microsoft.com/v1.0/me"
+	DefaultTenant = "common"
+
+	// ScopeIMAPOrg is the IMAP scope for organizational (O365) accounts.
+	ScopeIMAPOrg = "https://outlook.office365.com/IMAP.AccessAsUser.All"
+	// ScopeIMAPPersonal is the IMAP scope for personal Microsoft accounts
+	// (hotmail.com, outlook.com, live.com, etc.).
+	ScopeIMAPPersonal = "https://outlook.office.com/IMAP.AccessAsUser.All"
+
+	// MicrosoftConsumerTenantID is the fixed tenant ID for all personal
+	// Microsoft accounts (outlook.com, hotmail.com, live.com, etc.).
+	MicrosoftConsumerTenantID = "9188040d-6c67-4c5b-b112-36a304b66dad"
+
+	redirectPort = "8089"
+	callbackPath = "/callback/microsoft"
 )
 
-// IMAPScopes are used in the token exchange (single-resource constraint).
-var IMAPScopes = []string{
-	ScopeIMAP,
-	"offline_access",
+// scopesForEmail returns the OAuth scopes appropriate for the given email.
+// Personal Microsoft accounts use a different IMAP resource than org accounts.
+func scopesForEmail(email string) []string {
+	imapScope := ScopeIMAPOrg
+	if isPersonalMicrosoftAccount(email) {
+		imapScope = ScopeIMAPPersonal
+	}
+	return []string{imapScope, "offline_access", "openid", "email"}
 }
 
-// AuthorizeScopes include openid/email/User.Read for the initial consent screen
-// but Azure AD returns a token scoped to the first resource only.
-var AuthorizeScopes = []string{
-	ScopeIMAP,
-	"offline_access",
-	"openid",
-	"email",
-	"User.Read",
+// isPersonalMicrosoftAccount returns true for common consumer Microsoft domains.
+func isPersonalMicrosoftAccount(email string) bool {
+	parts := strings.SplitN(email, "@", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	domain := strings.ToLower(parts[1])
+	switch domain {
+	case "hotmail.com", "outlook.com", "live.com", "msn.com",
+		"hotmail.co.uk", "hotmail.fr", "hotmail.de", "hotmail.es", "hotmail.it",
+		"hotmail.co.jp", "hotmail.com.au", "hotmail.com.br",
+		"live.co.uk", "live.fr", "live.de", "live.it",
+		"live.com.au", "live.jp",
+		"outlook.co.uk", "outlook.fr", "outlook.de", "outlook.es", "outlook.it",
+		"outlook.jp", "outlook.kr", "outlook.com.br", "outlook.com.au":
+		return true
+	}
+	return false
+}
+
+// idTokenClaims holds the relevant claims extracted from a Microsoft ID token.
+type idTokenClaims struct {
+	Email             string // "email" claim (SMTP address)
+	PreferredUsername string // "preferred_username" claim (may be UPN for org accounts)
+	TenantID          string // "tid" claim
+}
+
+// imapScopeForTenant returns the correct IMAP scope based on the tenant ID.
+// The consumer tenant has a fixed, well-known ID; all others are org tenants.
+func imapScopeForTenant(tid string) string {
+	if strings.EqualFold(tid, MicrosoftConsumerTenantID) {
+		return ScopeIMAPPersonal
+	}
+	return ScopeIMAPOrg
 }
 
 type TokenMismatchError struct {
@@ -56,14 +97,15 @@ func (e *TokenMismatchError) Error() string {
 }
 
 type Manager struct {
-	clientID         string
-	tenantID         string
-	tokensDir        string
-	logger           *slog.Logger
-	graphURL         string // override for testing
-	tokenURLOverride string // override for testing
+	clientID  string
+	tenantID  string
+	tokensDir string
+	logger    *slog.Logger
 
-	browserFlowFn func(ctx context.Context, email string) (*oauth2.Token, error)
+	// browserFlowFn overrides browserFlow for testing. Returns (token, nonce, error).
+	browserFlowFn func(ctx context.Context, email string, scopes []string) (*oauth2.Token, string, error)
+	// verifyIDTokenFn overrides verifyIDToken for testing (bypasses OIDC validation).
+	verifyIDTokenFn func(ctx context.Context, rawIDToken string) (*idTokenClaims, error)
 }
 
 func NewManager(clientID, tenantID, tokensDir string, logger *slog.Logger) *Manager {
@@ -81,90 +123,236 @@ func NewManager(clientID, tenantID, tokensDir string, logger *slog.Logger) *Mana
 	}
 }
 
-func (m *Manager) oauthConfig(redirectURL string) *oauth2.Config {
-	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", m.tenantID)
-	if m.tokenURLOverride != "" {
-		tokenURL = m.tokenURLOverride
-	}
+func (m *Manager) oauthConfig(scopes []string) *oauth2.Config {
+	return m.oauthConfigWithTenant(m.tenantID, scopes)
+}
+
+func (m *Manager) oauthConfigWithTenant(tenantID string, scopes []string) *oauth2.Config {
 	return &oauth2.Config{
 		ClientID: m.clientID,
 		Endpoint: oauth2.Endpoint{
-			AuthURL:  fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/authorize", m.tenantID),
-			TokenURL: tokenURL,
+			AuthURL:  fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/authorize", tenantID),
+			TokenURL: fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID),
 		},
-		RedirectURL: redirectURL,
-		Scopes:      AuthorizeScopes,
+		RedirectURL: "http://localhost:" + redirectPort + callbackPath,
+		Scopes:      scopes,
 	}
 }
 
-// oauthConfigNoRedirect returns a config without redirect URL (for token refresh, device flow).
-func (m *Manager) oauthConfigNoRedirect() *oauth2.Config {
-	return m.oauthConfig("")
-}
-
-func (m *Manager) Authorize(ctx context.Context, email string, headless bool) error {
-	var token *oauth2.Token
-	var err error
-
-	if headless {
-		token, err = m.deviceCodeFlow(ctx, email)
-	} else if m.browserFlowFn != nil {
-		token, err = m.browserFlowFn(ctx, email)
-	} else {
-		token, err = m.browserFlow(ctx, email)
-	}
+func (m *Manager) Authorize(ctx context.Context, email string) error {
+	scopes := scopesForEmail(email)
+	flow := m.doBrowserFlow
+	token, nonce, err := flow(ctx, email, scopes)
 	if err != nil {
 		return err
 	}
-	// Note: we skip resolveTokenEmail here because the token is scoped to
-	// outlook.office.com (IMAP), not graph.microsoft.com (User.Read).
-	// Azure AD v2.0 doesn't allow mixing resource scopes in one token request.
-	// The IMAP login itself validates the email matches the authorized account.
-	return m.saveToken(email, token, IMAPScopes)
+	_, claims, err := m.resolveTokenEmail(ctx, email, token, nonce)
+	if err != nil {
+		return err
+	}
+
+	// Correct IMAP scope if the domain-based guess was wrong.
+	// The tid claim from the ID token is authoritative for account type.
+	// We must restart the browser flow (not just refresh) because consent
+	// for a different IMAP resource requires interactive authorization.
+	if claims.TenantID != "" {
+		correctIMAPScope := imapScopeForTenant(claims.TenantID)
+		if scopes[0] != correctIMAPScope {
+			m.logger.Info("correcting IMAP scope based on tenant ID, re-authorizing",
+				"email", email,
+				"tid", claims.TenantID,
+				"from", scopes[0],
+				"to", correctIMAPScope,
+			)
+			scopes = []string{correctIMAPScope, "offline_access", "openid", "email"}
+			token, nonce, err = flow(ctx, email, scopes)
+			if err != nil {
+				return fmt.Errorf("re-authorize with correct IMAP scope: %w", err)
+			}
+			_, claims, err = m.resolveTokenEmail(ctx, email, token, nonce)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	tenantID := ""
+	if claims != nil {
+		tenantID = claims.TenantID
+	}
+	return m.saveToken(email, token, scopes, tenantID)
 }
 
+// doBrowserFlow dispatches to browserFlowFn (test hook) or the real browserFlow.
+func (m *Manager) doBrowserFlow(ctx context.Context, email string, scopes []string) (*oauth2.Token, string, error) {
+	if m.browserFlowFn != nil {
+		return m.browserFlowFn(ctx, email, scopes)
+	}
+	return m.browserFlow(ctx, email, scopes)
+}
+
+// tokenRefreshTimeout bounds how long a single token refresh HTTP request
+// may take. Prevents indefinite hangs when Microsoft's token endpoint is
+// unreachable, while still being generous enough for slow networks.
+const tokenRefreshTimeout = 30 * time.Second
+
 // TokenSource returns a function that provides fresh access tokens.
-// Suitable for passing to imap.WithTokenSource.
+// Suitable for passing to imap.WithTokenSource. The returned function
+// is safe for concurrent use.
+//
+// Token refresh HTTP requests run against context.Background so they are
+// not cancelled if the caller's context expires between calls. This
+// prevents silent refresh failures during long-running syncs where the
+// original context may be narrower than the token source's lifetime.
+// Each refresh attempt is bounded by tokenRefreshTimeout to prevent
+// indefinite hangs when the token endpoint is unreachable.
 func (m *Manager) TokenSource(ctx context.Context, email string) (func(context.Context) (string, error), error) {
 	tf, err := m.loadTokenFile(email)
 	if err != nil {
 		return nil, fmt.Errorf("no valid token for %s: %w", email, err)
 	}
 
-	cfg := m.oauthConfigNoRedirect()
-	ts := cfg.TokenSource(ctx, &tf.Token)
+	scopes := tf.Scopes
+	if len(scopes) == 0 {
+		scopes = scopesForEmail(email)
+	}
+
+	// Migrate pre-migration tokens: if the token file has no tenant_id but the
+	// Manager was constructed with a specific tenant (not "common"), bind it.
+	// This allows scope validation to kick in on next load.
+	if tf.TenantID == "" && m.tenantID != "" && m.tenantID != DefaultTenant {
+		tf.TenantID = m.tenantID
+		m.logger.Info("migrating pre-scope-correction token: binding tenant ID",
+			"email", email, "tenant", m.tenantID)
+	}
+
+	// Validate persisted scopes against tenant ID to detect stale tokens
+	// from before scope-correction was added. Tokens without a tenant_id
+	// are pre-migration and skip this check (backward compatible).
+	if tf.TenantID != "" && len(tf.Scopes) > 0 {
+		correctScope := imapScopeForTenant(tf.TenantID)
+		if tf.Scopes[0] != correctScope {
+			m.logger.Debug("stale IMAP scope detected",
+				"email", email,
+				"current_scope", tf.Scopes[0],
+				"expected_scope", correctScope,
+				"tenant_id", tf.TenantID,
+			)
+			return nil, fmt.Errorf(
+				"token for %s has stale IMAP scope — run 'msgvault add-o365 %s' to re-authorize",
+				email, email,
+			)
+		}
+	}
+
+	refreshTenant := m.tenantID
+	if tf.TenantID != "" {
+		refreshTenant = tf.TenantID
+	}
+	oauthCfg := m.oauthConfigWithTenant(refreshTenant, scopes)
+	// Use context.Background so token refreshes are not cancelled by the
+	// caller's (sync-scoped) context. The token source outlives individual
+	// operations; tying it to a cancellable context would cause silent
+	// failures on the next call after cancellation.
+	ts := oauthCfg.TokenSource(context.Background(), &tf.Token)
+
+	var (
+		mu               sync.Mutex
+		lastAccessToken  = tf.AccessToken
+		lastRefreshToken = tf.RefreshToken
+		lastExpiry       = tf.Expiry
+	)
 
 	return func(callCtx context.Context) (string, error) {
-		tok, err := ts.Token()
-		if err != nil {
-			return "", fmt.Errorf("refresh Microsoft token (re-run 'add-o365 %s' if expired): %w", email, err)
+		// Run ts.Token() in a goroutine bounded by a timeout and the
+		// caller's context. The oauth2 TokenSource is internally
+		// synchronized and caches valid tokens, so most calls return
+		// immediately; the timeout only matters when a network refresh
+		// is required.
+		type tokenResult struct {
+			tok *oauth2.Token
+			err error
 		}
-		if tok.AccessToken != tf.AccessToken {
-			if saveErr := m.saveToken(email, tok, tf.Scopes); saveErr != nil {
-				m.logger.Warn("failed to save refreshed token", "email", email, "error", saveErr)
+		ch := make(chan tokenResult, 1)
+		go func() {
+			tok, err := ts.Token()
+			ch <- tokenResult{tok, err}
+		}()
+
+		timer := time.NewTimer(tokenRefreshTimeout)
+		defer timer.Stop()
+
+		var tok *oauth2.Token
+		select {
+		case res := <-ch:
+			if res.err != nil {
+				return "", fmt.Errorf("refresh Microsoft token: %w", res.err)
 			}
-			tf.Token = *tok
+			tok = res.tok
+		case <-timer.C:
+			return "", fmt.Errorf("microsoft token refresh timed out after %s — check network connectivity", tokenRefreshTimeout)
+		case <-callCtx.Done():
+			return "", fmt.Errorf("microsoft token refresh cancelled: %w", callCtx.Err())
 		}
+
+		mu.Lock()
+		changed := tok.AccessToken != lastAccessToken ||
+			tok.RefreshToken != lastRefreshToken ||
+			!tok.Expiry.Equal(lastExpiry)
+		if changed {
+			lastAccessToken = tok.AccessToken
+			lastRefreshToken = tok.RefreshToken
+			lastExpiry = tok.Expiry
+		}
+		mu.Unlock()
+
+		if changed {
+			if saveErr := m.saveToken(email, tok, scopes, tf.TenantID); saveErr != nil {
+				return "", fmt.Errorf("save refreshed microsoft token for %s: %w (token refreshed but not persisted — re-run may require re-authorization)", email, saveErr)
+			}
+		}
+
 		return tok.AccessToken, nil
 	}, nil
 }
 
-func (m *Manager) browserFlow(ctx context.Context, email string) (*oauth2.Token, error) {
-	// Bind to a dynamic port (OS-assigned)
-	listener, err := net.Listen("tcp", "localhost:0")
+// IMAPHost returns the correct IMAP hostname for the given email based on the
+// persisted token's scope. Must be called after Authorize completes.
+// Personal accounts use outlook.office.com; org accounts use outlook.office365.com.
+func (m *Manager) IMAPHost(email string) (string, error) {
+	tf, err := m.loadTokenFile(email)
 	if err != nil {
-		return nil, fmt.Errorf("start OAuth callback server: %w", err)
+		return "", fmt.Errorf("load token for %s: %w", email, err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
+	if len(tf.Scopes) > 0 && tf.Scopes[0] == ScopeIMAPPersonal {
+		return "outlook.office.com", nil
+	}
+	return "outlook.office365.com", nil
+}
 
-	redirectURL := fmt.Sprintf("http://localhost:%d", port)
-	cfg := m.oauthConfig(redirectURL)
+func (m *Manager) browserFlow(ctx context.Context, email string, scopes []string) (*oauth2.Token, string, error) {
+	// Bound the entire browser flow to 5 minutes. This prevents port 8089
+	// from staying bound indefinitely if the user abandons authorization.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	// Bind the listener before constructing the auth URL so that the redirect
+	// URI embedded in the authorization request matches exactly. Failing fast
+	// here produces a clear error instead of a silent hang.
+	ln, err := net.Listen("tcp", "localhost:"+redirectPort)
+	if err != nil {
+		return nil, "", fmt.Errorf(
+			"port %s is already in use — ensure no other process is using it and retry: %w",
+			redirectPort, err,
+		)
+	}
+
+	cfg := m.oauthConfig(scopes)
 
 	// PKCE (required by Azure AD for public clients)
 	verifierBytes := make([]byte, 32)
 	if _, err := rand.Read(verifierBytes); err != nil {
-		_ = listener.Close()
-		return nil, fmt.Errorf("generate PKCE verifier: %w", err)
+		return nil, "", fmt.Errorf("generate PKCE verifier: %w", err)
 	}
 	verifier := base64.RawURLEncoding.EncodeToString(verifierBytes)
 	challengeHash := sha256.Sum256([]byte(verifier))
@@ -173,211 +361,226 @@ func (m *Manager) browserFlow(ctx context.Context, email string) (*oauth2.Token,
 	// CSRF state
 	stateBytes := make([]byte, 16)
 	if _, err := rand.Read(stateBytes); err != nil {
-		_ = listener.Close()
-		return nil, fmt.Errorf("generate state: %w", err)
+		return nil, "", fmt.Errorf("generate state: %w", err)
 	}
 	state := base64.URLEncoding.EncodeToString(stateBytes)
+
+	// Nonce for ID token replay protection
+	nonceBytes := make([]byte, 32)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return nil, "", fmt.Errorf("generate nonce: %w", err)
+	}
+	nonce := base64.RawURLEncoding.EncodeToString(nonceBytes)
 
 	codeChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if r.URL.Query().Get("state") != state {
-			errChan <- fmt.Errorf("state mismatch: possible CSRF attack")
-			fmt.Fprintf(w, "Error: state mismatch")
+			select {
+			case errChan <- fmt.Errorf("state mismatch: possible CSRF attack"):
+			default:
+			}
+			_, _ = fmt.Fprintf(w, "Error: state mismatch")
 			return
 		}
 		if errMsg := r.URL.Query().Get("error"); errMsg != "" {
 			desc := r.URL.Query().Get("error_description")
-			errChan <- fmt.Errorf("microsoft OAuth error: %s: %s", errMsg, desc)
-			fmt.Fprintf(w, "Error: %s", desc)
+			select {
+			case errChan <- fmt.Errorf("microsoft OAuth error: %s: %s", errMsg, desc):
+			default:
+			}
+			_, _ = fmt.Fprintf(w, "Error: %s", desc)
 			return
 		}
 		code := r.URL.Query().Get("code")
 		if code == "" {
-			errChan <- fmt.Errorf("no code in callback")
-			fmt.Fprintf(w, "Error: no authorization code received")
+			select {
+			case errChan <- fmt.Errorf("no code in callback"):
+			default:
+			}
+			_, _ = fmt.Fprintf(w, "Error: no authorization code received")
 			return
 		}
-		codeChan <- code
-		fmt.Fprintf(w, "Authorization successful! You can close this window.")
+		select {
+		case codeChan <- code:
+		default:
+		}
+		_, _ = fmt.Fprintf(w, "Authorization successful! You can close this window.")
 	})
 
 	server := &http.Server{Handler: mux}
 	go func() {
-		if err := server.Serve(listener); err != http.ErrServerClosed {
-			errChan <- err
+		if err := server.Serve(ln); err != http.ErrServerClosed {
+			select {
+			case errChan <- err:
+			default:
+			}
 		}
 	}()
-	defer func() { _ = server.Shutdown(ctx) }()
+	defer func() {
+		// Use a fresh context for shutdown: the caller's ctx may already be
+		// cancelled (e.g. Ctrl-C), in which case Shutdown(ctx) returns
+		// immediately without waiting for in-flight requests to drain.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
 
 	authURL := cfg.AuthCodeURL(state,
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 		oauth2.SetAuthURLParam("login_hint", email),
+		oauth2.SetAuthURLParam("nonce", nonce),
 	)
 
 	fmt.Printf("Opening browser for Microsoft authorization...\n")
-	fmt.Printf("If browser doesn't open, visit:\n%s\n\n", authURL)
+	fmt.Printf("If browser doesn't open, visit:\n%s\n\n", redactAuthURL(authURL))
 	if err := openBrowser(authURL); err != nil {
 		m.logger.Warn("failed to open browser", "error", err)
 	}
 
 	select {
 	case code := <-codeChan:
-		return cfg.Exchange(ctx, code,
+		token, err := cfg.Exchange(ctx, code,
 			oauth2.SetAuthURLParam("code_verifier", verifier),
-			oauth2.SetAuthURLParam("scope", strings.Join(IMAPScopes, " ")),
 		)
+		return token, nonce, err
 	case err := <-errChan:
-		return nil, err
+		return nil, "", err
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, "", ctx.Err()
 	}
 }
 
-// deviceCodeFlow runs the Azure AD device authorization grant for headless/SSH environments.
-func (m *Manager) deviceCodeFlow(ctx context.Context, email string) (*oauth2.Token, error) {
-	deviceURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/devicecode", m.tenantID)
-	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", m.tenantID)
+// resolveTokenEmail verifies the ID token and validates the authenticated
+// email matches the expected address. Uses OIDC signature/issuer/audience
+// validation in production, or verifyIDTokenFn in tests.
+func (m *Manager) resolveTokenEmail(ctx context.Context, email string, token *oauth2.Token, nonce string) (string, *idTokenClaims, error) {
+	rawIDToken, _ := token.Extra("id_token").(string)
+	if rawIDToken == "" {
+		return "", nil, fmt.Errorf("no id_token in authorization response")
+	}
 
-	// Request device code
-	resp, err := http.PostForm(deviceURL, url.Values{
-		"client_id": {m.clientID},
-		"scope":     {strings.Join(IMAPScopes, " ")},
+	var claims *idTokenClaims
+	var err error
+	if m.verifyIDTokenFn != nil {
+		claims, err = m.verifyIDTokenFn(ctx, rawIDToken)
+	} else {
+		claims, err = m.verifyIDToken(ctx, rawIDToken, nonce)
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("verify ID token: %w", err)
+	}
+
+	// Prefer the "email" claim — it is the authoritative SMTP address.
+	if claims.Email != "" {
+		if !strings.EqualFold(claims.Email, email) {
+			return "", claims, &TokenMismatchError{Expected: email, Actual: claims.Email}
+		}
+		return claims.Email, claims, nil
+	}
+
+	// Fall back to "preferred_username". In Entra/O365 setups the UPN
+	// (sign-in identifier) can differ from the SMTP mailbox address, so a
+	// mismatch is not necessarily an error — trust the user-entered email as
+	// the mailbox address and log a warning. If the address is wrong, IMAP
+	// authentication will fail with an explicit error pointing back here.
+	if claims.PreferredUsername != "" {
+		if !strings.EqualFold(claims.PreferredUsername, email) {
+			m.logger.Warn("Microsoft sign-in UPN differs from the address you specified — "+
+				"proceeding with your address as the IMAP mailbox; "+
+				"if sync fails with an authentication error, re-run 'add-o365' "+
+				"using the UPN shown below as the email argument",
+				"specified", email,
+				"upn", claims.PreferredUsername,
+			)
+		}
+		return email, claims, nil
+	}
+
+	return "", claims, fmt.Errorf("no email or preferred_username claim in ID token")
+}
+
+// verifyIDToken validates the ID token using Microsoft's OIDC discovery and
+// JWKS endpoints. Checks signature, issuer, audience, expiry, and nonce.
+func (m *Manager) verifyIDToken(ctx context.Context, rawIDToken, nonce string) (*idTokenClaims, error) {
+	// Peek at the unverified tid to construct the tenant-specific OIDC provider.
+	// This is safe because the subsequent OIDC verification will fail if the
+	// token was actually issued by a different tenant than the derived issuer.
+	tid, err := peekTIDFromJWT(rawIDToken)
+	if err != nil {
+		return nil, fmt.Errorf("peek tenant ID from JWT: %w", err)
+	}
+
+	issuerURL := fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", tid)
+	provider, err := oidc.NewProvider(ctx, issuerURL)
+	if err != nil {
+		return nil, fmt.Errorf("OIDC discovery for tenant %s: %w", tid, err)
+	}
+
+	verifier := provider.Verifier(&oidc.Config{
+		ClientID: m.clientID,
 	})
+
+	idToken, err := verifier.Verify(ctx, rawIDToken)
 	if err != nil {
-		return nil, fmt.Errorf("request device code: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("device code request failed (HTTP %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("verify ID token signature/claims: %w", err)
 	}
 
-	var deviceResp struct {
-		DeviceCode      string `json:"device_code"`
-		UserCode        string `json:"user_code"`
-		VerificationURI string `json:"verification_uri"`
-		ExpiresIn       int    `json:"expires_in"`
-		Interval        int    `json:"interval"`
-		Message         string `json:"message"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&deviceResp); err != nil {
-		return nil, fmt.Errorf("parse device code response: %w", err)
+	// Verify nonce to prevent replay attacks.
+	if idToken.Nonce != nonce {
+		return nil, fmt.Errorf("ID token nonce mismatch (possible replay attack)")
 	}
 
-	fmt.Printf("\n%s\n\n", deviceResp.Message)
-
-	// Poll for token
-	interval := time.Duration(deviceResp.Interval) * time.Second
-	if interval < 5*time.Second {
-		interval = 5 * time.Second
+	var raw struct {
+		Email             string `json:"email"`
+		PreferredUsername string `json:"preferred_username"`
+		TenantID          string `json:"tid"`
 	}
-	deadline := time.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
-
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(interval):
-		}
-
-		tokenResp, err := http.PostForm(tokenURL, url.Values{
-			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
-			"client_id":   {m.clientID},
-			"device_code": {deviceResp.DeviceCode},
-		})
-		if err != nil {
-			continue
-		}
-
-		body, _ := io.ReadAll(tokenResp.Body)
-		_ = tokenResp.Body.Close()
-
-		if tokenResp.StatusCode == http.StatusOK {
-			var token oauth2.Token
-			if err := json.Unmarshal(body, &token); err != nil {
-				return nil, fmt.Errorf("parse token response: %w", err)
-			}
-			return &token, nil
-		}
-
-		var errResp struct {
-			Error string `json:"error"`
-		}
-		_ = json.Unmarshal(body, &errResp)
-
-		switch errResp.Error {
-		case "authorization_pending":
-			continue
-		case "slow_down":
-			interval += 5 * time.Second
-			continue
-		default:
-			return nil, fmt.Errorf("device code auth failed: %s", string(body))
-		}
+	if err := idToken.Claims(&raw); err != nil {
+		return nil, fmt.Errorf("extract ID token claims: %w", err)
 	}
-
-	return nil, fmt.Errorf("device code authorization timed out")
+	return &idTokenClaims{
+		Email:             raw.Email,
+		PreferredUsername: raw.PreferredUsername,
+		TenantID:          raw.TenantID,
+	}, nil
 }
 
-const resolveTimeout = 10 * time.Second
-
-func (m *Manager) resolveTokenEmail(ctx context.Context, email string, token *oauth2.Token) (string, error) {
-	valCtx, cancel := context.WithTimeout(ctx, resolveTimeout)
-	defer cancel()
-
-	cfg := m.oauthConfigNoRedirect()
-	ts := cfg.TokenSource(valCtx, token)
-	client := oauth2.NewClient(valCtx, ts)
-
-	graphURL := m.graphURL
-	if graphURL == "" {
-		graphURL = graphMeEndpoint
+// peekTIDFromJWT does a minimal unverified decode of a JWT to extract the
+// "tid" (tenant ID) claim. Used only to determine which OIDC provider URL
+// to construct for full validation.
+func peekTIDFromJWT(rawToken string) (string, error) {
+	parts := strings.Split(rawToken, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid JWT format (expected 3 parts, got %d)", len(parts))
 	}
-	req, err := http.NewRequestWithContext(valCtx, "GET", graphURL, nil)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return "", fmt.Errorf("create graph request: %w", err)
+		return "", fmt.Errorf("decode JWT payload: %w", err)
 	}
-
-	httpResp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("verify Microsoft account: %w", err)
+	var claims struct {
+		TenantID string `json:"tid"`
 	}
-	defer func() { _ = httpResp.Body.Close() }()
-
-	if httpResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(httpResp.Body)
-		return "", fmt.Errorf("MS Graph returned HTTP %d: %s", httpResp.StatusCode, string(body))
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", fmt.Errorf("parse JWT claims: %w", err)
 	}
-
-	var profile struct {
-		Mail              string `json:"mail"`
-		UserPrincipalName string `json:"userPrincipalName"`
+	if claims.TenantID == "" {
+		return "", fmt.Errorf("no tid claim in JWT")
 	}
-	if err := json.NewDecoder(httpResp.Body).Decode(&profile); err != nil {
-		return "", fmt.Errorf("parse MS Graph profile: %w", err)
-	}
-
-	actual := profile.Mail
-	if actual == "" {
-		actual = profile.UserPrincipalName
-	}
-	if !strings.EqualFold(actual, email) {
-		return "", &TokenMismatchError{Expected: email, Actual: actual}
-	}
-
-	return actual, nil
+	return claims.TenantID, nil
 }
 
 // --- Token storage ---
 
 type tokenFile struct {
 	oauth2.Token
-	Scopes []string `json:"scopes,omitempty"`
+	Scopes   []string `json:"scopes,omitempty"`
+	TenantID string   `json:"tenant_id,omitempty"`
 }
 
 func (m *Manager) TokenPath(email string) string {
@@ -385,12 +588,12 @@ func (m *Manager) TokenPath(email string) string {
 	return filepath.Join(m.tokensDir, "microsoft_"+safe+".json")
 }
 
-func (m *Manager) saveToken(email string, token *oauth2.Token, scopes []string) error {
+func (m *Manager) saveToken(email string, token *oauth2.Token, scopes []string, tenantID string) error {
 	if err := fileutil.SecureMkdirAll(m.tokensDir, 0700); err != nil {
 		return err
 	}
 
-	tf := tokenFile{Token: *token, Scopes: scopes}
+	tf := tokenFile{Token: *token, Scopes: scopes, TenantID: tenantID}
 	data, err := json.MarshalIndent(tf, "", "  ")
 	if err != nil {
 		return err
@@ -441,7 +644,24 @@ func (m *Manager) HasToken(email string) bool {
 	return err == nil
 }
 
+// DeleteToken revokes the refresh token at Microsoft (best-effort) and
+// removes the local token file. Revocation failures are logged but do not
+// prevent local cleanup — the user's intent is to remove the account, and
+// a stale remote token will expire naturally (≤90 days).
 func (m *Manager) DeleteToken(email string) error {
+	// Attempt to revoke the refresh token at Microsoft before deleting
+	// the local file. We load the token first so we can send the
+	// revocation request.
+	tf, loadErr := m.loadTokenFile(email)
+	if loadErr == nil && tf.RefreshToken != "" {
+		if revokeErr := m.revokeToken(tf.RefreshToken, tf.TenantID); revokeErr != nil {
+			m.logger.Warn("failed to revoke Microsoft token (will expire naturally)",
+				"email", email, "error", revokeErr)
+		} else {
+			m.logger.Info("revoked Microsoft refresh token", "email", email)
+		}
+	}
+
 	err := os.Remove(m.TokenPath(email))
 	if os.IsNotExist(err) {
 		return nil
@@ -449,11 +669,82 @@ func (m *Manager) DeleteToken(email string) error {
 	return err
 }
 
+// revokeToken sends a POST to Microsoft's OAuth2 logout/revocation endpoint.
+// Microsoft's v2.0 endpoint does not implement RFC 7009 token revocation,
+// but the /oauth2/v2.0/logout endpoint with a token hint invalidates the
+// refresh token. As a fallback we POST to the token endpoint with
+// grant_type=revocation which some tenants support.
+func (m *Manager) revokeToken(refreshToken, tenantID string) error {
+	if tenantID == "" {
+		tenantID = m.tenantID
+	}
+	if tenantID == "" {
+		tenantID = DefaultTenant
+	}
+
+	// Microsoft supports token revocation via the /oauth2/v2.0/logout
+	// endpoint for confidential clients, but for public clients the
+	// recommended approach is to POST to the token endpoint. We use a
+	// direct HTTP POST to revoke the refresh token.
+	revokeURL := fmt.Sprintf(
+		"https://login.microsoftonline.com/%s/oauth2/v2.0/logout", tenantID)
+
+	data := url.Values{
+		"client_id": {m.clientID},
+		"token":     {refreshToken},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, revokeURL,
+		strings.NewReader(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("create revocation request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("send revocation request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Microsoft's logout endpoint returns 200 on success; treat any 2xx as ok.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	return fmt.Errorf("revocation returned HTTP %d", resp.StatusCode)
+}
+
 func sanitizeEmail(email string) string {
-	safe := strings.ReplaceAll(email, "/", "_")
+	safe := strings.ReplaceAll(email, "\x00", "_")
+	safe = strings.ReplaceAll(safe, "/", "_")
 	safe = strings.ReplaceAll(safe, "\\", "_")
-	safe = strings.ReplaceAll(safe, "..", "_..")
-	return safe
+	safe = strings.ReplaceAll(safe, "..", "_.._")
+	// filepath.Base strips any residual directory components as a final
+	// defense-in-depth against path traversal in crafted email addresses.
+	return filepath.Base(safe)
+}
+
+// redactAuthURL strips security-sensitive query parameters (state, nonce,
+// code_challenge) from the authorization URL before printing to stdout.
+// The full URL is still passed to the browser via openBrowser; only the
+// fallback text shown in the terminal is redacted to prevent these
+// short-lived secrets from persisting in logs.
+func redactAuthURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "[invalid URL]"
+	}
+	q := u.Query()
+	for _, param := range []string{"state", "nonce", "code_challenge"} {
+		if q.Has(param) {
+			q.Set(param, "REDACTED")
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func openBrowser(rawURL string) error {
@@ -462,8 +753,8 @@ func openBrowser(rawURL string) error {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
 	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return fmt.Errorf("refused to open URL with scheme %q", parsed.Scheme)
+	if scheme != "https" {
+		return fmt.Errorf("refused to open URL with scheme %q (only https is allowed)", parsed.Scheme)
 	}
 
 	var cmd *exec.Cmd

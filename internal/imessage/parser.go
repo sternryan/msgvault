@@ -1,12 +1,12 @@
 package imessage
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"net/mail"
+	"bytes"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/wesm/msgvault/internal/textimport"
 	"howett.net/plist"
 )
 
@@ -41,146 +41,147 @@ func timeToAppleTimestamp(t time.Time, useNano bool) int64 {
 	return appleSec
 }
 
-// normalizeIdentifier converts a phone number or email address from iMessage's
-// handle table into a normalized email-like identifier for the participants table.
-// Returns the normalized email, domain, and display name.
-func normalizeIdentifier(handleID string) (email, domain, displayName string) {
-	handleID = strings.TrimSpace(handleID)
+// resolveHandle classifies an iMessage handle ID as a phone number,
+// email address, or raw identifier (e.g. system handles).
+func resolveHandle(handleID string) (phone, email, displayName string) {
 	if handleID == "" {
 		return "", "", ""
 	}
-
-	// Email addresses: use as-is (lowercased)
+	normalized, err := textimport.NormalizePhone(handleID)
+	if err == nil {
+		return normalized, "", normalized
+	}
 	if strings.Contains(handleID, "@") {
-		email = strings.ToLower(handleID)
-		if idx := strings.LastIndex(email, "@"); idx >= 0 {
-			domain = email[idx+1:]
-		}
-		return email, domain, ""
+		return "", strings.ToLower(handleID), ""
 	}
-
-	// Phone numbers: normalize and use a synthetic domain
-	phone := normalizePhone(handleID)
-	return phone + "@phone.imessage", "phone.imessage", phone
+	return "", "", handleID
 }
 
-// normalizePhone strips non-digit characters from a phone number and attempts
-// to produce a consistent E.164-like format.
-func normalizePhone(phone string) string {
-	// Preserve leading +
-	hasPlus := strings.HasPrefix(phone, "+")
-
-	// Extract digits only
-	var digits strings.Builder
-	for _, r := range phone {
-		if r >= '0' && r <= '9' {
-			digits.WriteRune(r)
-		}
-	}
-	d := digits.String()
-	if d == "" {
-		return phone // Return original if no digits found
-	}
-
-	// Try to normalize to E.164
-	if hasPlus {
-		return "+" + d
-	}
-	// 10-digit US number
-	if len(d) == 10 {
-		return "+1" + d
-	}
-	// 11-digit number starting with 1 (US with country code)
-	if len(d) == 11 && d[0] == '1' {
-		return "+" + d
-	}
-	// Other: prefix with +
-	return "+" + d
-}
-
-// buildMIME constructs a minimal RFC 2822 message from iMessage data.
-// The resulting bytes can be parsed by enmime for the sync pipeline.
-func buildMIME(fromAddr, toAddrs []string, date time.Time, messageID, body string) []byte {
-	var b strings.Builder
-
-	// From header
-	if len(fromAddr) > 0 {
-		b.WriteString("From: ")
-		b.WriteString(formatMIMEAddress(fromAddr[0]))
-		b.WriteString("\r\n")
-	}
-
-	// To header
-	if len(toAddrs) > 0 {
-		b.WriteString("To: ")
-		for i, addr := range toAddrs {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(formatMIMEAddress(addr))
-		}
-		b.WriteString("\r\n")
-	}
-
-	// Date header
-	if !date.IsZero() {
-		b.WriteString("Date: ")
-		b.WriteString(date.Format(time.RFC1123Z))
-		b.WriteString("\r\n")
-	}
-
-	// Subject (empty for iMessage - messages don't have subjects)
-	b.WriteString("Subject: \r\n")
-
-	// Message-ID — hash the GUID since iMessage GUIDs contain characters
-	// like ':' and '/' that are invalid in RFC 5322 msg-id local-part.
-	if messageID != "" {
-		h := sha256.Sum256([]byte(messageID))
-		safeID := hex.EncodeToString(h[:12]) // 24 hex chars, unique enough
-		b.WriteString("Message-ID: <")
-		b.WriteString(safeID)
-		b.WriteString("@imessage.local>\r\n")
-	}
-
-	// MIME version and content type
-	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
-
-	// Header/body separator
-	b.WriteString("\r\n")
-
-	// Body
-	if body != "" {
-		b.WriteString(body)
-	}
-
-	return []byte(b.String())
-}
-
-// formatMIMEAddress formats an email address for MIME headers.
-func formatMIMEAddress(addr string) string {
-	return (&mail.Address{Address: addr}).String()
-}
-
-// extractAttributedBodyText decodes an NSKeyedArchiver binary plist blob from
-// chat.db's attributedBody column and returns the plain text string.
+// extractAttributedBodyText extracts the plain text string from chat.db's
+// attributedBody column. This column uses one of two serialization formats:
 //
-// macOS Ventura+ / iOS 16+ stopped populating the plain-text "text" column for
-// most iMessages; the content lives exclusively in attributedBody as an
-// NSAttributedString archived via NSKeyedArchiver.
+//   - NSArchiver "streamtyped" — legacy format, header starts with
+//     \x04\x0bstreamtyped. The text is embedded as an NSString with a
+//     length prefix after the class hierarchy.
+//   - NSKeyedArchiver binary plist — starts with "bplist". The text lives
+//     at $objects[rootObj["NS.string"]].
 //
-// NSKeyedArchiver structure:
-//
-//	$top    = { root: <UID N> }
-//	$objects = [ "$null", { NS.string: <UID M>, NS.attributes: … }, …, "<the text>", … ]
-//
-// We navigate $top.root → $objects[N]["NS.string"] → $objects[M] to get the string.
+// macOS Ventura+ / iOS 16+ stopped populating the plain-text "text"
+// column for most iMessages; the content lives exclusively here.
 func extractAttributedBodyText(data []byte) string {
 	if len(data) == 0 {
 		return ""
 	}
 
-	// The binary plist root is a dict with $archiver/$top/$objects/$version keys.
+	// Try streamtyped format first (most common on modern macOS)
+	if bytes.HasPrefix(data, []byte("\x04\x0bstreamtyped")) {
+		return extractStreamtypedText(data)
+	}
+
+	// Try NSKeyedArchiver binary plist
+	if bytes.HasPrefix(data, []byte("bplist")) {
+		return extractKeyedArchiverText(data)
+	}
+
+	return ""
+}
+
+// extractStreamtypedText extracts text from NSArchiver streamtyped format.
+// The format embeds an NSString with the text content. We scan for the
+// NSString class marker, skip past the variable-length encoding prefix,
+// and extract the UTF-8 text that follows.
+//
+// After the marker (\x84\x01+), there is a length prefix:
+//   - Single-byte: bit 7 clear (0x00-0x7F), value is the text length
+//   - Multi-byte: bit 7 set, followed by length bytes and framing bytes
+//     (including 0x92 and other high bytes)
+//
+// The text content is always clean UTF-8 surrounded by binary framing.
+func extractStreamtypedText(data []byte) string {
+	marker := []byte("\x84\x01+")
+	idx := bytes.Index(data, marker)
+	if idx < 0 {
+		return ""
+	}
+	pos := idx + len(marker)
+	if pos >= len(data) {
+		return ""
+	}
+
+	// Decode the length prefix.
+	//
+	// Format after the \x84\x01+ marker:
+	//   Single-byte: 0x00-0x7F = length, then text immediately follows.
+	//   Multi-byte:  0x81 <len_byte> [framing_bytes...] <text> 0x86
+	//     The 0x81 flag means "1 length byte follows". The length byte
+	//     can be any value (including printable ASCII). After the length
+	//     byte, skip remaining framing bytes (0x00, 0x92, etc.) until
+	//     valid text starts.
+	b := data[pos]
+	var textLen int
+	if b&0x80 == 0 {
+		// Single-byte length (0x00-0x7F)
+		textLen = int(b)
+		pos++
+	} else {
+		// Multi-byte: 0x81 means 1 length byte follows
+		pos++ // skip the 0x81 flag
+		if pos >= len(data) {
+			return ""
+		}
+		textLen = int(data[pos])
+		pos++ // skip the length byte
+		// Skip remaining framing bytes (nulls, high bytes) before text
+		for pos < len(data) {
+			fb := data[pos]
+			if fb == 0x00 || (fb >= 0x80 && fb <= 0xBF) {
+				pos++
+				continue
+			}
+			break
+		}
+	}
+
+	if pos >= len(data) {
+		return ""
+	}
+
+	// Use the decoded length to extract exactly the right bytes
+	if textLen > 0 {
+		end := pos + textLen
+		if end > len(data) {
+			end = len(data)
+		}
+		text := string(data[pos:end])
+		for len(text) > 0 && !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
+		return text
+	}
+
+	// Fallback: extract until archiver control byte or end
+	end := pos
+	for end < len(data) {
+		ch := data[end]
+		if ch == 0x00 || ch == 0x86 {
+			break
+		}
+		end++
+	}
+
+	if end <= pos {
+		return ""
+	}
+
+	text := string(data[pos:end])
+	for len(text) > 0 && !utf8.ValidString(text) {
+		text = text[:len(text)-1]
+	}
+	return text
+}
+
+// extractKeyedArchiverText extracts text from NSKeyedArchiver binary plist.
+func extractKeyedArchiverText(data []byte) string {
 	var archive struct {
 		Top     map[string]plist.UID `plist:"$top"`
 		Objects []interface{}        `plist:"$objects"`
@@ -189,7 +190,6 @@ func extractAttributedBodyText(data []byte) string {
 		return ""
 	}
 
-	// $top["root"] is the UID of the NSAttributedString in $objects.
 	rootUID, ok := archive.Top["root"]
 	if !ok || int(rootUID) >= len(archive.Objects) {
 		return ""
@@ -200,7 +200,6 @@ func extractAttributedBodyText(data []byte) string {
 		return ""
 	}
 
-	// "NS.string" maps to the UID of the plain NSString text object.
 	nsStringUID, ok := rootObj["NS.string"].(plist.UID)
 	if !ok {
 		return ""

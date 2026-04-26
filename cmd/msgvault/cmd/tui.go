@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,7 +74,7 @@ Remote Mode:
 			if err != nil {
 				return fmt.Errorf("connect to remote: %w", err)
 			}
-			defer remoteEngine.Close()
+			defer func() { _ = remoteEngine.Close() }()
 			engine = remoteEngine
 			isRemote = true
 			fmt.Printf("Connected to remote: %s\n", cfg.Remote.URL)
@@ -84,7 +85,7 @@ Remote Mode:
 			if err != nil {
 				return fmt.Errorf("open database: %w", err)
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }()
 
 			// Ensure schema is up to date
 			if err := s.InitSchema(); err != nil {
@@ -130,7 +131,7 @@ Remote Mode:
 					engine = query.NewSQLiteEngine(s.DB())
 				} else {
 					engine = duckEngine
-					defer duckEngine.Close()
+					defer func() { _ = duckEngine.Close() }()
 				}
 			} else {
 				// Use SQLite directly
@@ -142,13 +143,32 @@ Remote Mode:
 			}
 		}
 
+		// Check if engine supports text queries
+		var textEngine query.TextEngine
+		if te, ok := engine.(query.TextEngine); ok {
+			textEngine = te
+		}
+
 		// Create and run TUI
 		model := tui.New(engine, tui.Options{
-			DataDir:  cfg.Data.DataDir,
-			Version:  Version,
-			IsRemote: isRemote,
+			DataDir:    cfg.Data.DataDir,
+			Version:    Version,
+			IsRemote:   isRemote,
+			TextEngine: textEngine,
 		})
 		p := tea.NewProgram(model, tea.WithAltScreen())
+
+		// Swap the slog default to a file-only logger for the
+		// duration of the TUI. Bubble Tea owns the terminal in
+		// alt-screen mode; any stderr write from slog corrupts
+		// the render. The daily log file still receives
+		// everything, so 'msgvault logs -f' in another pane
+		// continues to work for diagnostics.
+		prevLogger := slog.Default()
+		if logResult != nil {
+			slog.SetDefault(logResult.FileOnlyLogger())
+		}
+		defer slog.SetDefault(prevLogger)
 
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("run tui: %w", err)
@@ -207,7 +227,7 @@ func cacheNeedsBuild(dbPath, analyticsDir string) cacheStaleness {
 			Reason: "cannot verify cache status",
 		}
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var maxID int64
 	err = db.DB().QueryRow(`

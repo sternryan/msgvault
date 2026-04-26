@@ -12,11 +12,18 @@ LDFLAGS := -X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=$(VERSION) \
 
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 
-.PHONY: build build-go build-release install clean test test-v fmt lint tidy templ-generate shootout run-shootout setup-hooks help
+# Default build tags applied to every go build/test/bench invocation.
+# - fts5: enable the SQLite FTS5 full-text search extension
+# Note: sqlite_vec is intentionally disabled — it requires SQLite 3.38+ APIs
+# (sqlite3_vtab_in*) that go-sqlcipher v4.4.2 does not expose. Re-enable once
+# sqlcipher upgrades its bundled SQLite, or after migrating off sqlcipher.
+BUILD_TAGS := fts5
+
+.PHONY: build build-go build-release install clean test test-v fmt lint lint-ci tidy templ-generate shootout run-shootout setup-hooks install-hooks bench help
 
 # Build the binary (debug)
 build:
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o msgvault ./cmd/msgvault
+	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o msgvault ./cmd/msgvault
 	@chmod +x msgvault
 
 # Build Go binary (alias for build)
@@ -26,14 +33,14 @@ build-go:
 
 # Build with optimizations (release)
 build-release:
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o msgvault ./cmd/msgvault
+	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o msgvault ./cmd/msgvault
 	@chmod +x msgvault
 
 # Install to ~/.local/bin, $GOBIN, or $GOPATH/bin
 install:
 	@if [ -d "$(HOME)/.local/bin" ]; then \
 		echo "Installing to ~/.local/bin/msgvault"; \
-		CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/msgvault" ./cmd/msgvault; \
+		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/msgvault" ./cmd/msgvault; \
 	else \
 		INSTALL_DIR="$${GOBIN:-$$(go env GOBIN)}"; \
 		if [ -z "$$INSTALL_DIR" ]; then \
@@ -42,7 +49,7 @@ install:
 		fi; \
 		mkdir -p "$$INSTALL_DIR"; \
 		echo "Installing to $$INSTALL_DIR/msgvault"; \
-		CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/msgvault" ./cmd/msgvault; \
+		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/msgvault" ./cmd/msgvault; \
 	fi
 
 # Clean build artifacts
@@ -52,25 +59,46 @@ clean:
 
 # Run tests
 test:
-	go test -tags fts5 ./...
+	go test -tags "$(BUILD_TAGS)" ./...
 
 # Run tests with verbose output
 test-v:
-	go test -tags fts5 -v ./...
+	go test -tags "$(BUILD_TAGS)" -v ./...
 
 # Format code
 fmt:
 	go fmt ./...
 
-# Run linter
+# Run linter (auto-fix)
 lint:
-	@which golangci-lint > /dev/null || (echo "Install golangci-lint: https://golangci-lint.run/usage/install/" && exit 1)
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint not found. Install: https://golangci-lint.run/usage/install/" >&2; \
+		exit 1; \
+	fi
+	golangci-lint run --fix ./...
+
+# Run linter (CI, no auto-fix)
+lint-ci:
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint not found. Install: https://golangci-lint.run/usage/install/" >&2; \
+		exit 1; \
+	fi
 	golangci-lint run ./...
 
-# Enable pre-commit hook (fmt + lint)
-setup-hooks:
-	git config core.hooksPath .githooks
-	@echo "Pre-commit hook enabled (.githooks/pre-commit)"
+# Install pre-commit hook via prek
+install-hooks:
+	@if ! command -v prek >/dev/null 2>&1; then \
+		echo "prek not found. Install with: brew install prek" >&2; \
+		exit 1; \
+	fi
+	@HOOKS_PATH=$$(git config --get core.hooksPath 2>/dev/null); \
+	if [ "$$HOOKS_PATH" = ".githooks" ]; then \
+		git config --unset core.hooksPath; \
+	elif [ -n "$$HOOKS_PATH" ]; then \
+		echo "core.hooksPath is set to '$$HOOKS_PATH' — unset it first if intended" >&2; \
+		exit 1; \
+	fi
+	prek install
 
 # Tidy dependencies
 tidy:
@@ -79,6 +107,13 @@ tidy:
 # Regenerate templ files (dev only — not part of build)
 templ-generate:
 	go run github.com/a-h/templ/cmd/templ@v0.3.1001 generate
+
+# Run benchmarks (query engine smoke test)
+bench:
+	go test -tags "$(BUILD_TAGS)" -run=^$$ -bench=. -benchtime=1s -count=1 ./internal/query/
+
+# Setup hooks (alias for install-hooks)
+setup-hooks: install-hooks
 
 # Build the MIME shootout tool
 shootout:
@@ -102,10 +137,12 @@ help:
 	@echo "  test           - Run tests"
 	@echo "  test-v         - Run tests (verbose)"
 	@echo "  fmt            - Format code"
-	@echo "  lint           - Run linter"
+	@echo "  lint           - Run linter (auto-fix)"
+	@echo "  lint-ci        - Run linter (CI, no auto-fix)"
 	@echo "  tidy           - Tidy go.mod"
-	@echo "  setup-hooks    - Enable pre-commit hook (fmt + lint)"
+	@echo "  install-hooks  - Install pre-commit hook via prek"
 	@echo "  clean          - Remove build artifacts"
 	@echo ""
+	@echo "  bench          - Run query engine benchmarks"
 	@echo "  shootout       - Build MIME shootout tool"
 	@echo "  run-shootout   - Run MIME shootout"
