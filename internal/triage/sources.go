@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // SourcesDB is a read-only view over forge sources.db for URL hash lookup

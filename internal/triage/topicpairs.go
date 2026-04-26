@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/url"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // Pair is one row from forge graph.db.topic_pairs.
