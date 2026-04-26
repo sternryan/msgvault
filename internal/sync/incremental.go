@@ -138,9 +138,9 @@ func (s *Syncer) Incremental(ctx context.Context, source *store.Source) (summary
 				deletedSet[msg.Message.ID] = true
 			}
 			s.processLabelChanges(ctx, source.ID, record, labelMap, existingMap, updatedExisting)
-			checkpoint.MessagesProcessed++
 		}
 		checkpoint.MessagesUpdated += int64(len(updatedExisting))
+		checkpoint.MessagesProcessed += int64(len(newMsgThreads) + len(deletedSet) + len(updatedExisting))
 		newMsgIDs := make([]string, 0, len(newMsgThreads))
 		for id := range newMsgThreads {
 			newMsgIDs = append(newMsgIDs, id)
@@ -157,19 +157,33 @@ func (s *Syncer) Incremental(ctx context.Context, source *store.Source) (summary
 				s.logger.Warn("failed to batch fetch messages", "error", fetchErr)
 				checkpoint.ErrorsCount += int64(len(newMsgIDs))
 			} else {
+				var insertedIDs []int64
 				for i, raw := range rawMessages {
 					if raw == nil {
+						s.logger.Warn("failed to fetch message (nil response)", "id", newMsgIDs[i])
 						checkpoint.ErrorsCount++
 						continue
 					}
 					threadID := newMsgThreads[newMsgIDs[i]]
-					if err := s.ingestMessage(ctx, source.ID, raw, threadID, labelMap); err != nil {
+					insertedID, err := s.ingestMessage(ctx, source.ID, raw, threadID, labelMap)
+					if err != nil {
 						s.logger.Warn("failed to ingest added message", "id", newMsgIDs[i], "error", err)
 						checkpoint.ErrorsCount++
 						continue
 					}
+					if insertedID > 0 {
+						insertedIDs = append(insertedIDs, insertedID)
+					}
 					checkpoint.MessagesAdded++
 					summary.BytesDownloaded += int64(len(raw.Raw))
+				}
+
+				// Hook vector-search enqueue. Non-fatal on failure: missed
+				// IDs get picked up by full-rebuild.
+				if s.embedEnqueuer != nil && len(insertedIDs) > 0 {
+					if err := s.embedEnqueuer.EnqueueMessages(ctx, insertedIDs); err != nil {
+						s.logger.Warn("vector enqueue failed", "ids", len(insertedIDs), "error", err)
+					}
 				}
 			}
 		}
@@ -267,7 +281,17 @@ func (s *Syncer) handleLabelChange(ctx context.Context, sourceID int64, messageI
 			if err != nil {
 				return false, err
 			}
-			return false, s.ingestMessage(ctx, sourceID, raw, threadID, labelMap)
+			insertedID, err := s.ingestMessage(ctx, sourceID, raw, threadID, labelMap)
+			if err != nil {
+				return false, err
+			}
+			// Hook vector-search enqueue for the new message.
+			if s.embedEnqueuer != nil && insertedID > 0 {
+				if err := s.embedEnqueuer.EnqueueMessages(ctx, []int64{insertedID}); err != nil {
+					s.logger.Warn("vector enqueue failed", "ids", 1, "error", err)
+				}
+			}
+			return false, nil
 		}
 		// Removing labels from non-existent message is a no-op
 		return false, nil

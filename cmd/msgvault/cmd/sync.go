@@ -13,8 +13,6 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/gmail"
-	imaplib "github.com/wesm/msgvault/internal/imap"
-	"github.com/wesm/msgvault/internal/microsoft"
 	"github.com/wesm/msgvault/internal/oauth"
 	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/sync"
@@ -48,7 +46,7 @@ Examples:
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		if err := s.InitSchema(); err != nil {
 			return fmt.Errorf("init schema: %w", err)
@@ -67,6 +65,20 @@ Examples:
 			cancel()
 		}()
 
+		// Open vector backend (optional) so newly-ingested messages
+		// are enqueued for embedding.
+		vf, err := setupVectorFeatures(ctx, s.DB(), dbPath)
+		if err != nil {
+			return fmt.Errorf("vector features: %w", err)
+		}
+		defer func() {
+			if vf != nil && vf.Close != nil {
+				if closeErr := vf.Close(); closeErr != nil {
+					logger.Warn("closing vectors.db failed", "error", closeErr)
+				}
+			}
+		}()
+
 		getOAuthMgr := oauthManagerCache()
 
 		// Determine which accounts to sync.
@@ -81,7 +93,7 @@ Examples:
 		if len(args) == 1 {
 			// Resolve all sources for the identifier and route
 			// each by type, same as sync-full.
-			allMatches, lookupErr := s.GetSourcesByIdentifier(args[0])
+			allMatches, lookupErr := s.GetSourcesByIdentifierOrDisplayName(args[0])
 			if lookupErr != nil {
 				return fmt.Errorf("look up source: %w", lookupErr)
 			}
@@ -131,21 +143,13 @@ Examples:
 					}
 					gmailTargets = append(gmailTargets, syncTarget{source: src, email: src.Identifier})
 				case "imap":
-					hasAuth := imaplib.HasCredentials(cfg.TokensDir(), src.Identifier)
-					if !hasAuth && src.SyncConfig.Valid && src.SyncConfig.String != "" {
-						imapCfg, parseErr := imaplib.ConfigFromJSON(src.SyncConfig.String)
-						if parseErr == nil && imapCfg.EffectiveAuthMethod() == imaplib.AuthXOAuth2 {
-							msMgr := microsoft.NewManager(
-								cfg.Microsoft.ClientID,
-								cfg.Microsoft.EffectiveTenantID(),
-								cfg.TokensDir(),
-								logger,
-							)
-							hasAuth = msMgr.HasToken(imapCfg.Username)
-						}
+					skipMsg, parseErr := imapSkipReason(src)
+					if parseErr != nil {
+						syncErrors = append(syncErrors, fmt.Sprintf("%s: malformed sync_config: %v", src.Identifier, parseErr))
+						continue
 					}
-					if !hasAuth {
-						fmt.Printf("Skipping %s (no credentials - run 'add-imap' or 'add-o365' first)\n", src.Identifier)
+					if skipMsg != "" {
+						fmt.Println(skipMsg)
 						continue
 					}
 					imapTargets = append(imapTargets, src)
@@ -168,7 +172,7 @@ Examples:
 				break
 			}
 			fmt.Printf("Note: IMAP account %s does not support incremental sync. Running full sync.\n\n", src.Identifier)
-			if err := runFullSync(ctx, s, getOAuthMgr, src); err != nil {
+			if err := runFullSync(ctx, s, getOAuthMgr, src, vf); err != nil {
 				syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", src.Identifier, err))
 			}
 		}
@@ -182,11 +186,14 @@ Examples:
 				syncErrors = append(syncErrors, fmt.Sprintf("%s: no source found - run 'sync-full' first", target.email))
 				continue
 			}
-			if err := runIncrementalSync(ctx, s, getOAuthMgr, target.source); err != nil {
+			if err := runIncrementalSync(ctx, s, getOAuthMgr, target.source, vf); err != nil {
 				syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", target.email, err))
 				continue
 			}
 		}
+
+		// Rebuild analytics cache.
+		rebuildCacheAfterWrite(dbPath)
 
 		if len(syncErrors) > 0 {
 			fmt.Println()
@@ -202,7 +209,7 @@ Examples:
 	},
 }
 
-func runIncrementalSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (*oauth.Manager, error), source *store.Source) error {
+func runIncrementalSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (*oauth.Manager, error), source *store.Source, vf *vectorFeatures) error {
 	if !source.SyncCursor.Valid || source.SyncCursor.String == "" {
 		return fmt.Errorf("no history ID - run 'sync-full' first")
 	}
@@ -226,7 +233,7 @@ func runIncrementalSync(ctx context.Context, s *store.Store, getOAuthMgr func(st
 		gmail.WithLogger(logger),
 		gmail.WithRateLimiter(rateLimiter),
 	)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Set up sync options
 	opts := sync.DefaultOptions()
@@ -236,6 +243,9 @@ func runIncrementalSync(ctx context.Context, s *store.Store, getOAuthMgr func(st
 	syncer := sync.New(client, s, opts).
 		WithLogger(logger).
 		WithProgress(&CLIProgress{})
+	if vf != nil {
+		syncer.SetEmbedEnqueuer(vf.Enqueuer)
+	}
 
 	// Run incremental sync
 	startTime := time.Now()
