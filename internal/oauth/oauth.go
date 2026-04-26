@@ -37,6 +37,16 @@ var ScopesDeletion = []string{
 	"https://mail.google.com/",
 }
 
+// ScopesTriage extends the default Scopes with gmail.send for Phase 14
+// digest delivery. Granting gmail.send requires interactive consent and
+// is NOT covered by token refresh of an existing read/modify token —
+// callers must run a re-auth flow if HasScope(email, gmail.send) is false.
+var ScopesTriage = []string{
+	"https://www.googleapis.com/auth/gmail.readonly",
+	"https://www.googleapis.com/auth/gmail.modify",
+	"https://www.googleapis.com/auth/gmail.send",
+}
+
 const defaultProfileURL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 
 // TokenMismatchError is returned when the authorized Google account
