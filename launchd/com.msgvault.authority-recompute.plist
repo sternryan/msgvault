@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.msgvault.authority-recompute</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/services/msgvault/run-authority.sh</string>
+    </array>
+
+    <!-- Daily at 01:30 PT. NOT 02:00 PT: that wall-clock time
+         disappears every spring DST transition (skip-forward), and
+         launchd silently skips the run that day. 01:30 PT is well
+         before the Mon 07:00 PT triage digest fire and avoids the
+         gap entirely. See RESEARCH.md Pitfall 6 / Plan 16-02 A3.
+         TZ pinned via EnvironmentVariables below; do NOT rely on
+         macOS system TZ. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>1</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/opt/services/msgvault/logs/authority-recompute.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/opt/services/msgvault/logs/authority-recompute.err.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/opt/services/msgvault</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TZ</key>
+        <string>America/Los_Angeles</string>
+        <key>HOME</key>
+        <string>/Users/ryanstern</string>
+    </dict>
+
+    <!-- Mandatory per project_mac_mini_launchd_gotchas.md: services
+         without ThrottleInterval hot-loop on cold boot. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Do NOT auto-fire on bootstrap; the schedule alone governs runs.
+         Operator can use `launchctl kickstart` for one-shot test fires. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- IMPORTANT: the Process-Type key is intentionally absent.
+         Setting it (especially to "Background") deprioritizes the job
+         and eventually kills it. See project_mac_mini_launchd_gotchas.md. -->
+</dict>
+</plist>
