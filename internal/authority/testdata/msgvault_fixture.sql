@@ -68,7 +68,7 @@ INSERT INTO messages (id, conversation_id, sender_id, is_from_me, subject) VALUE
 INSERT INTO message_bodies (message_id, body_text, body_html) VALUES
     (100, 'See https://example.com/post/alpha for context.',         NULL),
     (101, 'Got it, thanks.',                                         NULL),
-    (102, 'Anything else on https://example.com/post/alpha?',        NULL),
+    (102, 'Anything else on https://example.com/post/alpha .',       NULL),
     (110, 'New paper: https://stanford.edu/research/beta is great.', NULL),
     (111, 'Will read.',                                              NULL),
     (112, 'Also check https://stanford.edu/research/beta references.', NULL),
