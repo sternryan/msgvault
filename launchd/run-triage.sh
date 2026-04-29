@@ -19,7 +19,6 @@ set +a
 #   MSGVAULT_ACCOUNT     — msgvault account whose OAuth token sends
 #   FORGE_GRAPH_DB       — path to forge graph.db (read-only)
 #   FORGE_SOURCES_DB     — path to forge sources.db (read-only)
-#   TRUSTED_CONTACTS_TOML — path to trusted_contacts.toml seed
 #   USER_PRIMARY_EMAIL   — user's primary address for curiosity/decision scoring
 
 OUT="/opt/services/msgvault/runs/triage-$(date +%Y%m%d).jsonl"
@@ -31,7 +30,6 @@ mkdir -p /opt/services/msgvault/logs
     --out "$OUT" \
     --forge-graph "${FORGE_GRAPH_DB:-/opt/services/forge/graph.db}" \
     --forge-sources "${FORGE_SOURCES_DB:-/opt/services/forge/sources.db}" \
-    --trusted-contacts "${TRUSTED_CONTACTS_TOML:-/opt/services/msgvault/trusted_contacts.toml}" \
     --user-email "${USER_PRIMARY_EMAIL:-}"
 
 /opt/services/msgvault/bin/msgvault digest send \
