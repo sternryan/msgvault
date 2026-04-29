@@ -33,10 +33,10 @@ type RunOptions struct {
 	// TrustedContacts is the curiosity allowlist (criterion #3).
 	TrustedContacts []string
 
-	// AuthorityStore returns per-sender authority scores in [0,1].
-	// Replaces the static ExpertAllowlist retired in Phase 16 (AUTHGRAPH-03).
-	// Pass authority.NewSQLiteStore(db) in production; a fake Store satisfies
-	// tests. Nil store → criterion #7 degrades to 0 (not a panic).
+	// AuthorityStore returns per-sender authority scores in [0,1] and is the
+	// successor to the retired static-domain field for criterion #7
+	// (AUTHGRAPH-03). Pass authority.NewSQLiteStore(db) in production; a fake
+	// Store satisfies tests. Nil store → criterion #7 degrades to 0 (no panic).
 	AuthorityStore authority.Store
 
 	// HighSignalDomains overrides DefaultHighSignalDomains (used by both the

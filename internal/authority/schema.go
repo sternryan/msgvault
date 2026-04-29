@@ -1,6 +1,6 @@
 // Package authority implements the per-sender [0,1] authority score that
-// feeds Phase 14 triage criterion #7 (replacing the static
-// trusted_contacts.toml allowlist). See .planning/phases/16-* for the
+// feeds Phase 14 triage criterion #7 (replacing the static contact-domain
+// allowlist retired in Phase 16). See .planning/phases/16-* for the
 // SPEC, CONTEXT, and RESEARCH that govern this package.
 package authority
 
