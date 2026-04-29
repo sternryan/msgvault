@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/wesm/msgvault/internal/authority"
 )
 
 // RunOptions configures a single triage run. Code paths share this struct so
@@ -31,8 +33,11 @@ type RunOptions struct {
 	// TrustedContacts is the curiosity allowlist (criterion #3).
 	TrustedContacts []string
 
-	// ExpertAllowlist is the expert-domain allowlist (criterion #7).
-	ExpertAllowlist []string
+	// AuthorityStore returns per-sender authority scores in [0,1].
+	// Replaces the static ExpertAllowlist retired in Phase 16 (AUTHGRAPH-03).
+	// Pass authority.NewSQLiteStore(db) in production; a fake Store satisfies
+	// tests. Nil store → criterion #7 degrades to 0 (not a panic).
+	AuthorityStore authority.Store
 
 	// HighSignalDomains overrides DefaultHighSignalDomains (used by both the
 	// short-no-URL filter and ScoreURLGold).
@@ -90,7 +95,7 @@ func RunTriage(opts RunOptions) (int, error) {
 			Recurrence: ScoreRecurrence(m, opts.Recurrence),
 			Bridge:     ScoreBridge(m, opts.Lexicon, opts.TopicPairs),
 			Decision:   ScoreDecision(m, opts.RyanEmail),
-			Expert:     ScoreExpert(m, opts.ExpertAllowlist),
+			Expert:     ScoreExpert(m, opts.AuthorityStore),
 		}
 		composite := Composite(s, DefaultWeights)
 		if composite < threshold {

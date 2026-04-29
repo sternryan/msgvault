@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -106,15 +105,17 @@ func runTriage(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Load trusted contacts (graceful degradation on missing file).
-	var trusted, expert []string
+	// Note: Phase 16 retires the static allowlist's expert-domain derivation;
+	// criterion #7 now consumes authority.Store (wired below). Curiosity
+	// criterion #3 still benefits from the trusted-contact list while the
+	// loader exists. The whole loader block + TOML flag are removed in
+	// 16-03 Task 2; the AuthorityStore wiring lands there too.
+	var trusted []string
 	if data, err := os.ReadFile(triageContacts); err == nil {
 		var seed trustedcontacts.SeedFile
 		if _, err := toml.Decode(string(data), &seed); err == nil {
 			for _, c := range seed.Contacts {
 				trusted = append(trusted, c.Email)
-				if at := strings.LastIndex(c.Email, "@"); at >= 0 && at < len(c.Email)-1 {
-					expert = append(expert, c.Email[at+1:])
-				}
 			}
 		}
 	} else {
@@ -142,7 +143,7 @@ func runTriage(cmd *cobra.Command, _ []string) error {
 		Sources:         sources,
 		Recurrence:      rec,
 		TrustedContacts: trusted,
-		ExpertAllowlist: expert,
+		AuthorityStore:  nil, // wired in Task 2 → authority.NewSQLiteStore(s.DB())
 		RyanEmail:       triageRyanEmail,
 		Threshold:       triageThreshold,
 		MaxN:            triageMaxN,
