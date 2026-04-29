@@ -24,7 +24,7 @@ var authorityCmd = &cobra.Command{
 	Use:   "authority",
 	Short: "Authority graph operations (per-sender [0,1] scoring for triage)",
 	Long: `Operations on the per-sender authority score that feeds Phase 14
-triage criterion #7 (replacing the static trusted_contacts.toml allowlist).
+triage criterion #7 (replacing the static contact-domain allowlist retired in Phase 16).
 
 The score combines volume, response_rate_7d, and link_quality (0.2/0.4/0.4
 weighted composite). See .planning/phases/16-* for the full spec.`,
