@@ -6,12 +6,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
+	"github.com/wesm/msgvault/internal/authority"
 	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/triage"
-	"github.com/wesm/msgvault/internal/trustedcontacts"
 )
 
 var (
@@ -19,7 +18,6 @@ var (
 	triageOut          string
 	triageForgeGraph   string
 	triageForgeSources string
-	triageContacts     string
 	triageNoise        string
 	triageMaxN         int
 	triageThreshold    float64
@@ -45,7 +43,6 @@ func init() {
 	triageCmd.Flags().StringVar(&triageOut, "out", "", "Output JSONL path (default stdout)")
 	triageCmd.Flags().StringVar(&triageForgeGraph, "forge-graph", "", "Path to forge graph.db (read-only)")
 	triageCmd.Flags().StringVar(&triageForgeSources, "forge-sources", "", "Path to forge sources.db (read-only)")
-	triageCmd.Flags().StringVar(&triageContacts, "trusted-contacts", "trusted_contacts.toml", "Trusted contacts TOML")
 	triageCmd.Flags().StringVar(&triageNoise, "noise-domains", "", "Noise domains TOML (optional override)")
 	triageCmd.Flags().IntVar(&triageMaxN, "max", 25, "Top-N candidates to emit")
 	triageCmd.Flags().Float64Var(&triageThreshold, "threshold", 0.55, "Composite score threshold (0..1)")
@@ -104,23 +101,12 @@ func runTriage(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Load trusted contacts (graceful degradation on missing file).
-	// Note: Phase 16 retires the static allowlist's expert-domain derivation;
-	// criterion #7 now consumes authority.Store (wired below). Curiosity
-	// criterion #3 still benefits from the trusted-contact list while the
-	// loader exists. The whole loader block + TOML flag are removed in
-	// 16-03 Task 2; the AuthorityStore wiring lands there too.
-	var trusted []string
-	if data, err := os.ReadFile(triageContacts); err == nil {
-		var seed trustedcontacts.SeedFile
-		if _, err := toml.Decode(string(data), &seed); err == nil {
-			for _, c := range seed.Contacts {
-				trusted = append(trusted, c.Email)
-			}
-		}
-	} else {
-		logger.Warn("trusted contacts not found; continuing with degraded scoring", "path", triageContacts)
-	}
+	// Phase 16 (AUTHGRAPH-03): the static contact-allowlist file is
+	// RETIRED. Criterion #7 (expert) consumes authority.Store; criterion
+	// #3 (curiosity) loses the trusted-contact bucket and degrades to the
+	// 0.2 unknown-sender bucket until a future plan supplies a computed
+	// trusted-contact list (likely a thresholded cut over authority_scores).
+	authStore := authority.NewSQLiteStore(s.DB())
 
 	// Build recurrence index from the same window.
 	rec := triage.NewRecurrence(msgs, time.Now())
@@ -142,8 +128,8 @@ func runTriage(cmd *cobra.Command, _ []string) error {
 		TopicPairs:      tp,
 		Sources:         sources,
 		Recurrence:      rec,
-		TrustedContacts: trusted,
-		AuthorityStore:  nil, // wired in Task 2 → authority.NewSQLiteStore(s.DB())
+		TrustedContacts: nil,
+		AuthorityStore:  authStore,
 		RyanEmail:       triageRyanEmail,
 		Threshold:       triageThreshold,
 		MaxN:            triageMaxN,
