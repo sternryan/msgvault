@@ -164,36 +164,67 @@ func recompute(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSourcesD
 		return nil
 	}
 
+	// Single-pass aggregation (PERF-16-02 fix). Replaces the per-sender N+1
+	// pattern (3 queries × 13,547 senders × 4s/query = 45+ hours) with three
+	// full-corpus GROUP BY aggregations (~5-15s each) plus an in-memory join.
+	// See .planning/phases/16-trusted-contact-authority-graph/16-04-REPORT.md.
+	stageStart = time.Now()
+	slog.Info("authority aggregation stage starting", "stage", "volume_by_sender")
+	volumeBySender, err := aggregateVolumeBySender(ctx, msgvaultDB)
+	if err != nil {
+		return res, err
+	}
+	slog.Info("authority aggregation stage complete",
+		"stage", "volume_by_sender",
+		"sender_count", len(volumeBySender),
+		"elapsed_s", time.Since(stageStart).Seconds(),
+	)
+
+	stageStart = time.Now()
+	slog.Info("authority aggregation stage starting", "stage", "reply_counts_by_sender", "reply_mode", replyMode)
+	replyBySender, err := aggregateReplyCountsBySender(ctx, msgvaultDB, replyMode, userEmail)
+	if err != nil {
+		return res, err
+	}
+	slog.Info("authority aggregation stage complete",
+		"stage", "reply_counts_by_sender",
+		"sender_count", len(replyBySender),
+		"elapsed_s", time.Since(stageStart).Seconds(),
+	)
+
+	stageStart = time.Now()
+	slog.Info("authority aggregation stage starting", "stage", "link_counts_by_sender")
+	linkBySender, err := aggregateLinkCountsBySender(ctx, msgvaultDB)
+	if err != nil {
+		return res, err
+	}
+	slog.Info("authority aggregation stage complete",
+		"stage", "link_counts_by_sender",
+		"sender_count", len(linkBySender),
+		"elapsed_s", time.Since(stageStart).Seconds(),
+	)
+
 	stageStart = time.Now()
 	slog.Info("authority scoring stage starting", "sender_count", len(senders), "reply_mode", replyMode, "max_v", maxV)
 	processed := 0
 
 	for _, email := range senders {
-		volume, err := queryVolume(ctx, msgvaultDB, email)
-		if err != nil {
-			return res, err
-		}
+		volume := volumeBySender[email]
 		volNorm := VolumeNorm(volume, maxV)
 
-		inbound, replied, err := queryReplyCounts(ctx, msgvaultDB, email, replyMode, userEmail)
-		if err != nil {
-			return res, err
-		}
-		replyRate := ResponseRate7d(inbound, replied)
+		rc := replyBySender[email]
+		replyRate := ResponseRate7d(rc.inbound, rc.replied)
 
-		matched, total, err := queryLinkCounts(ctx, msgvaultDB, email)
-		if err != nil {
-			return res, err
-		}
-		linkQ := LinkQuality(matched, total)
+		lc := linkBySender[email]
+		linkQ := LinkQuality(lc.matched, lc.total)
 
 		composite := Composite(volNorm, replyRate, linkQ)
 		pending = append(pending, scoreRow{
-			email:    email,
-			volume:   volume,
-			replyRt:  replyRate,
-			linkQ:    linkQ,
-			score:    composite,
+			email:   email,
+			volume:  volume,
+			replyRt: replyRate,
+			linkQ:   linkQ,
+			score:   composite,
 		})
 		if len(pending) >= batchSize {
 			if err := flush(); err != nil {
@@ -374,20 +405,51 @@ func queryUnionSenders(ctx context.Context, db *sql.DB, watermark int64) ([]stri
 	return out, rows.Err()
 }
 
-func queryVolume(ctx context.Context, db *sql.DB, email string) (int, error) {
-	var n int
-	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*)
-		   FROM messages m
-		   JOIN participants p ON p.id = m.sender_id
-		  WHERE LOWER(TRIM(p.email_address)) = ?
-		    AND m.is_from_me = 0`,
-		email,
-	).Scan(&n)
-	return n, err
+// replyCounts pairs (inbound_total, replied_within_7d) for one sender.
+type replyCounts struct {
+	inbound int
+	replied int
 }
 
-// queryReplyCounts returns (inbound_total, replied_within_7d).
+// linkCounts pairs (matched, total) URL counts for one sender (post-dedup).
+type linkCounts struct {
+	matched int
+	total   int
+}
+
+// aggregateVolumeBySender does ONE pass over messages to produce a
+// LOWER(TRIM(email)) → inbound_count map for every sender. Replaces
+// 13,547 separate queryVolume calls (PERF-16-02 fix).
+func aggregateVolumeBySender(ctx context.Context, db *sql.DB) (map[string]int, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT LOWER(TRIM(p.email_address)) AS sender, COUNT(*) AS volume
+		   FROM messages m
+		   JOIN participants p ON p.id = m.sender_id
+		  WHERE m.is_from_me = 0
+		    AND p.email_address IS NOT NULL AND p.email_address <> ''
+		  GROUP BY LOWER(TRIM(p.email_address))`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("authority: aggregate volume: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]int)
+	for rows.Next() {
+		var sender string
+		var volume int
+		if err := rows.Scan(&sender, &volume); err != nil {
+			return nil, err
+		}
+		out[sender] = volume
+	}
+	return out, rows.Err()
+}
+
+// aggregateReplyCountsBySender does ONE pass over messages with a correlated
+// reply-EXISTS subquery, grouping by sender. Replaces the per-sender N+1 reply
+// query that took ~4s/sender on the live 472k-msg DB. The correlated subquery
+// is unavoidable (reply windows are per-message), but amortising across one
+// query instead of 13,547 separate calls collapses 45+ hours into seconds.
 //
 // Reply detection (Pitfall 3 / A1):
 //   - mode 'is_from_me': reply row has r.is_from_me = 1
@@ -395,9 +457,9 @@ func queryVolume(ctx context.Context, db *sql.DB, email string) (int, error) {
 //
 // Thread identity uses internal conversations.id via m.conversation_id
 // (Pitfall 4: do NOT use thread_id; the column does not exist).
-func queryReplyCounts(ctx context.Context, db *sql.DB, email, replyMode, userEmail string) (int, int, error) {
+func aggregateReplyCountsBySender(ctx context.Context, db *sql.DB, replyMode, userEmail string) (map[string]replyCounts, error) {
 	var replyPredicate string
-	args := []any{email}
+	var args []any
 	switch replyMode {
 	case "is_from_me":
 		replyPredicate = "r.is_from_me = 1"
@@ -405,11 +467,12 @@ func queryReplyCounts(ctx context.Context, db *sql.DB, email, replyMode, userEma
 		replyPredicate = `LOWER(TRIM((SELECT email_address FROM participants WHERE id = r.sender_id))) = LOWER(?)`
 		args = append(args, userEmail)
 	default:
-		return 0, 0, fmt.Errorf("authority: unknown reply mode %q", replyMode)
+		return nil, fmt.Errorf("authority: unknown reply mode %q", replyMode)
 	}
 
 	q := fmt.Sprintf(`
 		SELECT
+		  LOWER(TRIM(p.email_address)) AS sender,
 		  COUNT(*) AS inbound,
 		  SUM(CASE WHEN EXISTS (
 		    SELECT 1 FROM messages r
@@ -422,74 +485,108 @@ func queryReplyCounts(ctx context.Context, db *sql.DB, email, replyMode, userEma
 		  ) THEN 1 ELSE 0 END) AS replied
 		FROM messages m
 		JOIN participants p ON p.id = m.sender_id
-		WHERE LOWER(TRIM(p.email_address)) = ?
-		  AND m.is_from_me = 0
+		WHERE m.is_from_me = 0
+		  AND p.email_address IS NOT NULL AND p.email_address <> ''
+		GROUP BY LOWER(TRIM(p.email_address))
 	`, replyPredicate)
 
-	var inbound int
-	var repliedNull sql.NullInt64
-	if err := db.QueryRowContext(ctx, q, args...).Scan(&inbound, &repliedNull); err != nil {
-		return 0, 0, fmt.Errorf("authority: reply counts for %s: %w", email, err)
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("authority: aggregate reply counts: %w", err)
 	}
-	return inbound, int(repliedNull.Int64), nil
+	defer rows.Close()
+	out := make(map[string]replyCounts)
+	for rows.Next() {
+		var sender string
+		var inbound int
+		var repliedNull sql.NullInt64
+		if err := rows.Scan(&sender, &inbound, &repliedNull); err != nil {
+			return nil, err
+		}
+		out[sender] = replyCounts{inbound: inbound, replied: int(repliedNull.Int64)}
+	}
+	return out, rows.Err()
 }
 
-// queryLinkCounts pulls all body_text from a sender's inbound messages,
-// extracts URLs (mirroring triage.ExtractURLs), normalises each, and joins
-// against url_hash_cache.compiled to derive (matched, total).
-func queryLinkCounts(ctx context.Context, db *sql.DB, email string) (int, int, error) {
+// aggregateLinkCountsBySender streams (sender, body_text) ONCE for every
+// inbound message, extracts URLs in Go, dedups per sender, and joins against
+// url_hash_cache (which is small — ~1k rows — so we materialise it in
+// memory once for O(1) lookups). Replaces the per-sender N+1 link query
+// that re-scanned messages and ran a separate url_hash_cache lookup per
+// URL per sender.
+func aggregateLinkCountsBySender(ctx context.Context, db *sql.DB) (map[string]linkCounts, error) {
+	// Materialise url_hash_cache once — small enough to fit easily in memory.
+	urlCache := make(map[string]int) // url_normalized → compiled (0/1)
+	{
+		rows, err := db.QueryContext(ctx, `SELECT url_normalized, compiled FROM url_hash_cache`)
+		if err != nil {
+			return nil, fmt.Errorf("authority: load url_hash_cache: %w", err)
+		}
+		for rows.Next() {
+			var u string
+			var c int
+			if err := rows.Scan(&u, &c); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			urlCache[u] = c
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	// Stream every (sender, body) pair once and accumulate URLs per sender.
 	rows, err := db.QueryContext(ctx,
-		`SELECT COALESCE(b.body_text, '')
+		`SELECT LOWER(TRIM(p.email_address)) AS sender, COALESCE(b.body_text, '') AS body
 		   FROM messages m
 		   JOIN participants p ON p.id = m.sender_id
 		   LEFT JOIN message_bodies b ON b.message_id = m.id
-		  WHERE LOWER(TRIM(p.email_address)) = ?
-		    AND m.is_from_me = 0`,
-		email,
+		  WHERE m.is_from_me = 0
+		    AND p.email_address IS NOT NULL AND p.email_address <> ''`,
 	)
 	if err != nil {
-		return 0, 0, fmt.Errorf("authority: link bodies for %s: %w", email, err)
+		return nil, fmt.Errorf("authority: aggregate link bodies: %w", err)
 	}
 	defer rows.Close()
 
-	seen := map[string]bool{}
-	var urls []string
+	urlsBySender := make(map[string]map[string]bool)
 	for rows.Next() {
-		var body string
-		if err := rows.Scan(&body); err != nil {
-			return 0, 0, err
+		var sender, body string
+		if err := rows.Scan(&sender, &body); err != nil {
+			return nil, err
 		}
-		for _, raw := range extractURLs(body) {
+		if body == "" {
+			continue
+		}
+		raws := extractURLs(body)
+		if len(raws) == 0 {
+			continue
+		}
+		seen := urlsBySender[sender]
+		if seen == nil {
+			seen = make(map[string]bool)
+			urlsBySender[sender] = seen
+		}
+		for _, raw := range raws {
 			n := NormalizeURL(raw)
-			if seen[n] {
-				continue
-			}
 			seen[n] = true
-			urls = append(urls, n)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, 0, err
-	}
-	if len(urls) == 0 {
-		return 0, 0, nil
+		return nil, err
 	}
 
-	matched := 0
-	for _, u := range urls {
-		var compiled int
-		err := db.QueryRowContext(ctx,
-			`SELECT compiled FROM url_hash_cache WHERE url_normalized = ?`, u,
-		).Scan(&compiled)
-		if err == sql.ErrNoRows {
-			continue
+	out := make(map[string]linkCounts, len(urlsBySender))
+	for sender, urls := range urlsBySender {
+		matched := 0
+		for u := range urls {
+			if compiled, ok := urlCache[u]; ok && compiled == 1 {
+				matched++
+			}
 		}
-		if err != nil {
-			return 0, 0, fmt.Errorf("authority: lookup url %s: %w", u, err)
-		}
-		if compiled == 1 {
-			matched++
-		}
+		out[sender] = linkCounts{matched: matched, total: len(urls)}
 	}
-	return matched, len(urls), nil
+	return out, nil
 }
