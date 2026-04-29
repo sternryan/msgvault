@@ -4,8 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 )
+
+// progressBatch is the number of senders processed between INFO progress logs
+// during the UPSERT phase. Tunable via env MSGVAULT_AUTHORITY_PROGRESS_BATCH if
+// the operator wants tighter or looser cadence; default is 1000.
+const progressBatch = 1000
 
 // RecomputeResult summarises one recompute run.
 type RecomputeResult struct {
@@ -38,17 +45,25 @@ func RecomputeFull(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSour
 
 func recompute(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSourcesDir, userEmail string, full bool) (RecomputeResult, error) {
 	var res RecomputeResult
+	runStart := time.Now()
 
+	slog.Info("authority recompute starting", "full", full, "forge_sources_dir", forgeSourcesDir)
+
+	stageStart := time.Now()
 	if err := InitSchema(msgvaultDB); err != nil {
 		return res, err
 	}
+	slog.Info("authority stage complete", "stage", "init_schema", "elapsed_s", time.Since(stageStart).Seconds())
 
 	// Refresh URL hash cache before computing link_quality so the join is
 	// against the current forge filesystem snapshot.
 	if forgeSourcesDir != "" && sourcesDB != nil {
+		stageStart = time.Now()
+		slog.Info("authority stage starting", "stage", "build_url_hash_cache")
 		if err := BuildURLHashCache(ctx, msgvaultDB, forgeSourcesDir, sourcesDB); err != nil {
 			return res, fmt.Errorf("authority: build url cache: %w", err)
 		}
+		slog.Info("authority stage complete", "stage", "build_url_hash_cache", "elapsed_s", time.Since(stageStart).Seconds())
 	}
 
 	// BEGIN IMMEDIATE — fail fast if another writer holds the DB (Pitfall 7).
@@ -72,11 +87,13 @@ func recompute(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSourcesD
 	}
 
 	// Determine reply detection mode (Pitfall 3 / A1).
+	stageStart = time.Now()
 	replyMode, err := decideReplyMode(ctx, msgvaultDB, userEmail)
 	if err != nil {
 		return res, err
 	}
 	res.ReplyMode = replyMode
+	slog.Info("authority reply mode decided", "mode", replyMode, "elapsed_s", time.Since(stageStart).Seconds())
 	if _, err := msgvaultDB.ExecContext(ctx,
 		`UPDATE authority_state SET reply_detection_mode = ? WHERE id = 1`,
 		replyMode,
@@ -85,13 +102,16 @@ func recompute(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSourcesD
 	}
 
 	// Pitfall 2: max_v over the FULL corpus, not the touched subset.
+	stageStart = time.Now()
 	maxV, err := queryMaxVolume(ctx, msgvaultDB)
 	if err != nil {
 		return res, err
 	}
 	res.MaxVolume = maxV
+	slog.Info("authority max_volume computed", "max_v", maxV, "elapsed_s", time.Since(stageStart).Seconds())
 
 	// Determine sender set.
+	stageStart = time.Now()
 	var senders []string
 	if full {
 		senders, err = queryAllSenders(ctx, msgvaultDB)
@@ -101,6 +121,7 @@ func recompute(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSourcesD
 	if err != nil {
 		return res, err
 	}
+	slog.Info("authority senders enumerated", "sender_count", len(senders), "full", full, "elapsed_s", time.Since(stageStart).Seconds())
 
 	// New watermark — always at least the prior watermark.
 	var maxRowid int64
@@ -122,6 +143,10 @@ func recompute(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSourcesD
 		}
 		committed = true
 		res.NewWatermark = watermark
+		slog.Info("authority recompute no-op",
+			"watermark", watermark,
+			"total_elapsed_s", time.Since(runStart).Seconds(),
+		)
 		return res, nil
 	}
 
@@ -138,6 +163,10 @@ func recompute(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSourcesD
 		pending = pending[:0]
 		return nil
 	}
+
+	stageStart = time.Now()
+	slog.Info("authority scoring stage starting", "sender_count", len(senders), "reply_mode", replyMode, "max_v", maxV)
+	processed := 0
 
 	for _, email := range senders {
 		volume, err := queryVolume(ctx, msgvaultDB, email)
@@ -171,10 +200,24 @@ func recompute(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSourcesD
 				return res, err
 			}
 		}
+		processed++
+		if processed%progressBatch == 0 {
+			elapsed := time.Since(stageStart).Seconds()
+			rate := float64(processed) / elapsed
+			est := float64(len(senders)-processed) / rate
+			slog.Info("authority scoring progress",
+				"processed", processed,
+				"total", len(senders),
+				"elapsed_s", elapsed,
+				"rate_per_s", rate,
+				"est_remaining_s", est,
+			)
+		}
 	}
 	if err := flush(); err != nil {
 		return res, err
 	}
+	slog.Info("authority scoring stage complete", "processed", processed, "elapsed_s", time.Since(stageStart).Seconds())
 
 	if _, err := msgvaultDB.ExecContext(ctx,
 		`UPDATE authority_state
@@ -193,6 +236,13 @@ func recompute(ctx context.Context, msgvaultDB, sourcesDB *sql.DB, forgeSourcesD
 	committed = true
 	res.SendersUpdated = len(senders)
 	res.NewWatermark = maxRowid
+	slog.Info("authority recompute complete",
+		"senders_updated", res.SendersUpdated,
+		"new_watermark", res.NewWatermark,
+		"max_volume", res.MaxVolume,
+		"reply_mode", res.ReplyMode,
+		"total_elapsed_s", time.Since(runStart).Seconds(),
+	)
 	return res, nil
 }
 
