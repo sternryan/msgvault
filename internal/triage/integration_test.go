@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+// stanfordAuthorityFake returns an authority Store that mimics the legacy
+// "stanford.edu allowlist" by giving any stanford.edu sender a high authority
+// score (0.95). Used by the legacy E2E tests that pre-date AUTHGRAPH-03 so
+// they keep their original semantic intent (criterion #7 fires for the test
+// senders) without depending on the production authority_scores table.
+func stanfordAuthorityFake() fakeAuthorityStore {
+	return fakeAuthorityStore{
+		"alex@stanford.edu":       0.95,
+		"researcher@stanford.edu": 0.95,
+	}
+}
+
 // TestRunTriage_EndToEnd exercises RunTriage with fixture forge graph.db +
 // in-memory message slice. Asserts I1 (exits OK with valid JSONL),
 // I2 (only candidates >= threshold), I3 (max-N truncation),
@@ -68,7 +80,7 @@ func TestRunTriage_EndToEnd(t *testing.T) {
 		Lexicon:         lex,
 		TopicPairs:      tp,
 		RyanEmail:       "ryan@example.com",
-		ExpertAllowlist: []string{"stanford.edu"},
+		AuthorityStore:  stanfordAuthorityFake(),
 		Threshold:       0.30,
 		MaxN:            25,
 		Out:             &buf,
@@ -101,7 +113,7 @@ func TestRunTriage_EndToEnd(t *testing.T) {
 		Lexicon:         lex,
 		TopicPairs:      tp,
 		RyanEmail:       "ryan@example.com",
-		ExpertAllowlist: []string{"stanford.edu"},
+		AuthorityStore:  stanfordAuthorityFake(),
 		Threshold:       0.30,
 		MaxN:            25,
 		Out:             &buf2,
@@ -135,7 +147,7 @@ func TestRunTriage_MaxN(t *testing.T) {
 	n, err := RunTriage(RunOptions{
 		Messages:        msgs,
 		Lexicon:         lex,
-		ExpertAllowlist: []string{"stanford.edu"},
+		AuthorityStore:  stanfordAuthorityFake(),
 		Threshold:       0.0,
 		MaxN:            5,
 		Out:             &buf,

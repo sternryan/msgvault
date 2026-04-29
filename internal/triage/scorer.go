@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/wesm/msgvault/internal/authority"
 )
 
 // Composite computes the 7-criterion composite score per TRIAGE-02:
@@ -186,22 +188,23 @@ func ScoreDecision(m *Message, ryanEmail string) float64 {
 	return 0.5
 }
 
-// ScoreExpert implements criterion #7.
-// 1.0 if sender domain is in expertAllowlist; 0.0 otherwise (including nil/empty).
-func ScoreExpert(m *Message, expertAllowlist []string) float64 {
-	if m == nil || len(expertAllowlist) == 0 {
+// ScoreExpert implements criterion #7 — the authority-graph rewire (D-08,
+// AUTHGRAPH-03). The legacy static-domain allowlist is RETIRED in Phase 16;
+// callers pass an authority.Store (typically authority.NewSQLiteStore over
+// the production msgvault DB) and ScoreExpert returns the continuous
+// per-sender authority_score in [0,1].
+//
+// Graceful degradation: nil message OR nil store OR unknown sender all
+// return 0.0. The triage scoring path must never panic on a missing
+// authority backend; an empty authority_scores table simply weights this
+// criterion at 0 until the daily recompute populates it.
+func ScoreExpert(m *Message, store authority.Store) float64 {
+	if m == nil || store == nil {
 		return 0.0
 	}
-	sender := strings.ToLower(strings.TrimSpace(m.Sender))
-	at := strings.LastIndex(sender, "@")
-	if at < 0 || at == len(sender)-1 {
+	score, ok := store.Score(m.Sender)
+	if !ok {
 		return 0.0
 	}
-	domain := sender[at+1:]
-	for _, allowed := range expertAllowlist {
-		if strings.EqualFold(strings.TrimSpace(allowed), domain) {
-			return 1.0
-		}
-	}
-	return 0.0
+	return score
 }

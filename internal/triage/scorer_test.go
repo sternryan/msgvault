@@ -2,11 +2,26 @@ package triage
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/wesm/msgvault/internal/authority"
 )
 
 func almostEqual(a, b, eps float64) bool { return math.Abs(a-b) <= eps }
+
+// fakeAuthorityStore is a test double for authority.Store. Lookups are
+// case-insensitive + trim-canonicalized to mirror SQLiteStore semantics.
+type fakeAuthorityStore map[string]float64
+
+func (f fakeAuthorityStore) Score(email string) (float64, bool) {
+	v, ok := f[strings.ToLower(strings.TrimSpace(email))]
+	return v, ok
+}
+
+// Compile-time check that the fake satisfies the production interface.
+var _ authority.Store = fakeAuthorityStore{}
 
 // S1, S2, S3, S5: composite arithmetic.
 func TestComposite_AllOnes(t *testing.T) {
@@ -116,21 +131,64 @@ func TestScoreDecision_NoMarker(t *testing.T) {
 	}
 }
 
-// E1: expert allowlist hit
-func TestScoreExpert_Allow(t *testing.T) {
-	m := &Message{Sender: "prof@stanford.edu"}
-	got := ScoreExpert(m, []string{"stanford.edu"})
-	if got != 1.0 {
-		t.Fatalf("expert allow = %v, want 1.0", got)
+// AUTHGRAPH-03 acceptance: continuous (not binary) authority value flows through
+// ScoreExpert when the authority Store returns a known sender's mid-range score.
+func TestScoreExpert_Continuous(t *testing.T) {
+	store := fakeAuthorityStore{"alice@x.com": 0.42}
+	got := ScoreExpert(&Message{Sender: "alice@x.com"}, store)
+	if !almostEqual(got, 0.42, 1e-9) {
+		t.Fatalf("expert continuous = %v, want 0.42", got)
 	}
 }
 
-// E2: empty allowlist (graceful degrade)
-func TestScoreExpert_Empty(t *testing.T) {
-	m := &Message{Sender: "x@y.com"}
-	got := ScoreExpert(m, nil)
+// Unknown sender → (0,false) from store → ScoreExpert returns 0.0.
+func TestScoreExpert_UnknownSender(t *testing.T) {
+	store := fakeAuthorityStore{"alice@x.com": 0.42}
+	got := ScoreExpert(&Message{Sender: "bob@x.com"}, store)
 	if got != 0.0 {
-		t.Fatalf("expert empty = %v", got)
+		t.Fatalf("expert unknown = %v, want 0.0", got)
+	}
+}
+
+// Nil store must not panic — graceful degrade to 0 when authority backend
+// is unavailable (e.g. recompute hasn't run yet, DB closed mid-test).
+func TestScoreExpert_NilStore(t *testing.T) {
+	got := ScoreExpert(&Message{Sender: "alice@x.com"}, nil)
+	if got != 0.0 {
+		t.Fatalf("expert nil store = %v, want 0.0", got)
+	}
+}
+
+// Nil message must not panic.
+func TestScoreExpert_NilMessage(t *testing.T) {
+	store := fakeAuthorityStore{"alice@x.com": 0.42}
+	got := ScoreExpert(nil, store)
+	if got != 0.0 {
+		t.Fatalf("expert nil msg = %v, want 0.0", got)
+	}
+}
+
+// Boundary values must NOT collapse to {0.0, 1.0}; the whole point of the
+// authority rewire is continuous expert scoring.
+func TestScoreExpert_BoundaryValues(t *testing.T) {
+	cases := []struct {
+		name string
+		val  float64
+	}{
+		{"zero", 0.0},
+		{"low", 0.1},
+		{"mid", 0.5},
+		{"high", 0.9},
+		{"one", 1.0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := fakeAuthorityStore{"x@y.com": tc.val}
+			got := ScoreExpert(&Message{Sender: "x@y.com"}, store)
+			if !almostEqual(got, tc.val, 1e-9) {
+				t.Fatalf("got %v, want %v", got, tc.val)
+			}
+		})
 	}
 }
 
