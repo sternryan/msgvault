@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // AuthMethod specifies how the IMAP client authenticates.
@@ -28,6 +29,30 @@ type Config struct {
 	STARTTLS   bool       `json:"starttls"` // STARTTLS upgrade (port 143)
 	Username   string     `json:"username"`
 	AuthMethod AuthMethod `json:"auth_method,omitempty"`
+
+	// SyncSince is an optional per-account floor (YYYY-MM-DD). IMAP accounts
+	// have no incremental cursor, so `sync` runs a full sync every night; without
+	// a floor, adding an already-archived mailbox as a new source re-pulls its
+	// entire history. Empty means no filter (existing accounts are unaffected).
+	SyncSince string `json:"sync_since,omitempty"`
+}
+
+// SyncSinceLayout is the accepted date format for SyncSince, matching the
+// --after/--before flags on sync-full.
+const SyncSinceLayout = "2006-01-02"
+
+// EffectiveSince parses SyncSince into a UTC date. A zero time means no filter.
+// A malformed value is an error rather than a silent zero, so a typo cannot
+// quietly turn a bounded sync into a full-history backfill.
+func (c *Config) EffectiveSince() (time.Time, error) {
+	if c.SyncSince == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(SyncSinceLayout, c.SyncSince)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid sync_since %q (expected YYYY-MM-DD): %w", c.SyncSince, err)
+	}
+	return t, nil
 }
 
 // EffectiveAuthMethod returns the auth method, defaulting to password
