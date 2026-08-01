@@ -52,6 +52,7 @@ var (
 	imapHost     string
 	imapPort     int
 	imapUsername string
+	imapSince    string
 	imapNoTLS    bool
 	imapSTARTTLS bool
 )
@@ -92,11 +93,18 @@ Examples:
 
 		// Build IMAP config
 		imapCfg := &imapclient.Config{
-			Host:     imapHost,
-			Port:     imapPort,
-			TLS:      !imapNoTLS && !imapSTARTTLS,
-			STARTTLS: imapSTARTTLS,
-			Username: imapUsername,
+			Host:      imapHost,
+			Port:      imapPort,
+			TLS:       !imapNoTLS && !imapSTARTTLS,
+			STARTTLS:  imapSTARTTLS,
+			Username:  imapUsername,
+			SyncSince: imapSince,
+		}
+
+		// Fail before touching the network or writing credentials: a typo here
+		// would otherwise persist and silently backfill the whole mailbox.
+		if _, err := imapCfg.EffectiveSince(); err != nil {
+			return err
 		}
 
 		var (
@@ -229,6 +237,7 @@ func init() {
 	addIMAPCmd.Flags().StringVar(&imapHost, "host", "", "IMAP server hostname (required)")
 	addIMAPCmd.Flags().IntVar(&imapPort, "port", 0, "IMAP server port (default: 993 for TLS, 143 otherwise; matches defaults in internal/microsoft/imap package)")
 	addIMAPCmd.Flags().StringVar(&imapUsername, "username", "", "IMAP username / email address (required)")
+	addIMAPCmd.Flags().StringVar(&imapSince, "since", "", "Only sync messages on or after this date (YYYY-MM-DD). Use when the mailbox is already archived under another account, to avoid re-pulling its full history.")
 	addIMAPCmd.Flags().BoolVar(&imapNoTLS, "no-tls", false, "Disable TLS (plain connection, not recommended)")
 	addIMAPCmd.Flags().BoolVar(&imapSTARTTLS, "starttls", false, "Use STARTTLS instead of implicit TLS")
 	rootCmd.AddCommand(addIMAPCmd)

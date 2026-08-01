@@ -273,6 +273,17 @@ func buildAPIClient(ctx context.Context, src *store.Source, getOAuthMgr func(str
 			}
 			before = t
 		}
+		// Fall back to the account's persisted floor when --after was not given.
+		// `sync` runs a full sync for IMAP accounts (no incremental cursor), so
+		// without this the nightly run re-pulls the entire mailbox and the floor
+		// recorded at add-imap time would only ever apply to a manual sync-full.
+		if since.IsZero() {
+			cfgSince, err := imapCfg.EffectiveSince()
+			if err != nil {
+				return nil, err
+			}
+			since = cfgSince
+		}
 		if !since.IsZero() || !before.IsZero() {
 			opts = append(opts, imaplib.WithDateFilter(since, before))
 		}
