@@ -4,7 +4,7 @@
 
 - ✅ **v1.0 Core Archive & Search** - Phases 1-5 (shipped 2026-03-10)
 - ✅ **v1.1 Web UI Rebuild (Templ + HTMX)** - Phases 6-11 (shipped 2026-03-11)
-- 🚧 **v1.2 AI Archive Intelligence** - Phases 12-14 (in progress)
+- ✅ **v1.2 AI Archive Intelligence** - Phases 12-14 (shipped 2026-04-12; corrected 2026-08-14 — this line previously read "in progress" despite all 3 phases being marked complete below and MILESTONES.md/the `v1.2` tag confirming ship. Substantial untracked work continued after v1.2 — see `.planning/STATE.md`.)
 
 ## Phases
 
@@ -24,7 +24,7 @@ See: `milestones/v1.1-ROADMAP.md` for full phase details.
 
 </details>
 
-### 🚧 v1.2 AI Archive Intelligence (In Progress)
+### ✅ v1.2 AI Archive Intelligence (Shipped 2026-04-12)
 
 **Milestone Goal:** Add semantic search and AI-powered enrichment to the 472K-message archive using $200 Azure credits before they expire 2026-05-11.
 
