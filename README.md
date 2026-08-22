@@ -104,7 +104,7 @@ See the [CLI Reference](https://msgvault.io/cli-reference/) for full details.
 
 ## Triage pipeline (cross-repo with forge)
 
-Score archived Gmail against the [forge](https://github.com/quartermint/forge) knowledge graph and surface a weekly digest of high-signal candidates for forge ingestion. Pure SQL + regex + lexical scoring — **no LLM/encoder calls in the hot path**.
+Score archived Gmail against the [forge](https://github.com/quartermint/forge) (local checkout `~/lattice`) knowledge graph and surface a weekly digest of high-signal candidates for forge ingestion. Pure SQL + regex + lexical scoring — **no LLM/encoder calls in the hot path**.
 
 ### `msgvault triage`
 
@@ -116,21 +116,28 @@ msgvault triage \
     --out /tmp/triage.jsonl \
     --forge-graph /opt/services/forge/graph.db \
     --forge-sources /opt/services/forge/sources.db \
-    --trusted-contacts trusted_contacts.toml \
     --user-email ryan@example.com
 ```
 
+Other flags: `--noise-domains` (TOML override), `--max` (default 25), `--threshold`
+(default 0.55), `--limit` (default 5000 messages scored per run).
+
 Output is byte-identical for byte-identical inputs (deterministic sort: `score DESC, date DESC, message_id ASC`).
 
-### `msgvault trusted-contacts bootstrap`
+### `msgvault authority recompute`
 
-Generate the static seed TOML for criterion #3 / #7 weighting. Top-N senders by total inbound + outbound message volume over the lookback window, with a noise-domain allowlist excluded.
+Per-sender authority scoring in `[0,1]`, used by triage's expert criterion.
 
 ```bash
-msgvault trusted-contacts bootstrap --top 10 --out trusted_contacts.toml
+msgvault authority recompute            # incremental, from the stored watermark
+msgvault authority recompute --full     # rebuild from scratch
 ```
 
-A missing `trusted_contacts.toml` makes `triage` log a warning and continue with degraded scoring (criterion #3 returns 0.2, criterion #7 returns 0.0).
+⛔ **`trusted_contacts.toml` and `msgvault trusted-contacts bootstrap` no longer exist.**
+The `trustedcontacts` package and its cobra command were deleted (AUTHGRAPH-03); triage's
+expert scoring now reads the authority store instead. The `--trusted-contacts` flag is gone
+— passing it is an error, not a no-op. Run `authority recompute` instead; a launchd plist
+and `run-authority.sh` are provided for a daily recompute.
 
 ### `msgvault digest send`
 
@@ -154,7 +161,12 @@ msgvault digest send \
 
 Each digest row is numbered 1..N matching the JSONL row index, so the recipient can scan the email, note row numbers, and approve via `forge ingest --from-triage <jsonl> --select 1,3,7` on the forge side.
 
-### Weekly cron (Mac Mini)
+### Weekly cron
+
+⚠ The launchd plists below were written for the Mac Mini, which was wiped 2026-07-09 and
+rebuilt as `hammer` (`100.98.187.0`). msgvault's iMessage sync runs there now; check where
+these timers are actually installed before assuming they fire.
+
 
 A launchd plist at `launchd/com.msgvault.triage-digest.plist` runs the full `triage` → `digest send` pipeline every Monday 07:00 PT:
 
